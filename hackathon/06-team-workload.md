@@ -19,10 +19,10 @@ Dev A owns dependencies/schema changes in the Python service. Dev B requests add
 | H0–H2 | GPU/runtime inventory; model acquisition; contract + fixture | Browser API boundary; upload UI skeleton; Mailpit | Organizer questions, evaluation audio permissions, shortlist of human reviewers | H01 contract frozen; assets downloading |
 | H2–H6 | H02 + first H03 ASR path | H04 against fixture; H06 renderer/mail with synthetic approved result | Write gold actions for clips; collect mixed-language test speech | Real audio produces transcript; UI/mail plumbing works |
 | H6–H12 | H05 local extraction + final state; connect pipeline | Wire real API; automatic routing/delivery; clear errors | Check actual output, log errors by consequence; draft pitch story | New short recording -> minutes -> Mailpit |
-| H12–H20 | Fix language/decision failures; profile memory/tokens | Offline launch/preflight; retry/receipt UI; browser integration | Run guided acceptance; annotate held-out samples; draft slides | Full offline short flow; reproducible launch |
-| H20–H24 | One-hour run and bottleneck analysis | Fix long-job UI/mail/recovery; package current working version | Time run, capture results, verify late correction | First hour benchmark + cold-start evidence |
-| H24–H32 | Close P0 accuracy/time gates | Close P0 UX/security/delivery gates | Test new operator flow; refine benchmark slide | All mandatory gates green or explicit no-go on extras |
-| H32–H40 | If green: H10 semantics/replay support, then H11 diarization | If green: H10 evidence drawer, then H11 name correction | Prepare final narrative; surprise paraphrase; demo rehearsal | One coherent differentiator; release candidate frozen |
+| H12–H20 | Connect incremental ASR to saved live windows; fix language/decision failures | H12 live recording/chunk persistence; offline launch/preflight; retry UI | Run upload/video/live acceptance; annotate held-out samples; draft slides | Both required input modes work; reproducible launch |
+| H20–H24 | One-hour upload run and bottleneck analysis; compare remote 16 GB host on permitted fixtures | Test long live capture and video decode; fix recovery; package working version | Time both paths, capture results, verify late correction | Upload benchmark + live finalization measurement + cold-start evidence |
+| H24–H32 | Close P0 accuracy/time gates; H16 edit revisions and dependent rebuild | H16 manual edit/batch preview/undo; close P0 UI/delivery gates | Test new operator correction and automatic flows; refine benchmark slide | All mandatory gates green or explicit no-go on extras |
+| H32–H40 | If green: H17 bounded flags, then H10 history; H11 only if time remains | If green: H17 find-like review + shared replay drawer, then H10 history | Measure false suggestions/review effort; surprise paraphrase; demo rehearsal | One coherent differentiator; release candidate frozen |
 | H40–H46 | Fix regressions only; verify model/config freeze | Bundle/launch checks; demo screen readability; backup | Practice timed pitch/Q&A; verify submission requirements | Three complete rehearsals, one disconnected cold start |
 | H46–H48 | Technical support and submission verification | Technical support and submission verification | Lead submission, presentation, demo | Reproducible artifact and honest claims |
 
@@ -33,6 +33,10 @@ Reserve rest explicitly across H12–H32 and coordinate handoffs. If effective e
 **Dev A — H01/H02/H03:** read [architecture/contracts](02-target-architecture.md) and [profiles](03-models-and-performance.md). Deliver a bounded local upload/job API producing durable timed multilingual transcript JSON. Freeze fixture and API errors with B. Validate real audio and missing-model failure; do not start enrollment or multi-model retries.
 
 **Dev B — H01/H04/H06:** read [current app](01-current-app.md) and [contracts](02-target-architecture.md). Add browser-safe meeting flow in the existing Svelte project. Use one clearly labeled development fixture until A's service works. Implement deterministic minutes and local configured SMTP delivery; test real receipt and failure/retry. Mock UI success is not completion.
+
+**Dev B with A — H12, required after first integrated upload flow:** B owns microphone UI, sequenced chunk persistence and Stop/seal handling; A owns incremental ASR and final reconciliation. Agree recording state and timestamp mapping before parallel edits. This is P0, not a stretch feature. If capacity is tight, remove all P1/P2 work before cutting either required input mode.
+
+**Dev A+B — H16 then H17:** read [transcript review](07-transcript-review.md). A owns versioned spans/edits, LLM candidates and downstream invalidation; B owns manual editing, find-like navigation, select/apply/undo and one reusable audio drawer. CEO labels true/false flags and times review. H17 gets an H32–H36 timebox after P0; keep manual editing and cut unreliable suggestions if the experiment fails.
 
 **CEO — evaluation/pitch:** read [start here](README.md), [speakers](04-speakers.md), and [acceptance](05-build-plan.md). Prepare reference decisions, find fluent reviewers, run the checklist with developer guidance, and record concrete failures. Do not tune models or merge source changes. Aim for a usable slide outline by H20 and first spoken rehearsal by H28.
 
@@ -54,7 +58,7 @@ Suggested five-slide outline:
 
 1. Problem: confidential hospital meetings mix Romanian, Russian, and English; decisions change during discussion.
 2. Product: upload/record -> original transcript -> decisions/owners/deadlines -> internal email.
-3. Technical advantage: final confirmed commitment survives corrections; uncertain facts remain explicit; source evidence is inspectable.
+3. Technical advantage: final confirmed commitment survives corrections; source evidence is inspectable; targeted term review fixes consequential errors with few actions. Show only features actually qualified.
 4. Proof: actual hardware, dataset size, accuracy/error counts, one-hour timing, offline run. Mark untested 16 GB deployment as untested.
 5. Demo + next steps: local mail receipt, limitations, hospital pilot requirements.
 

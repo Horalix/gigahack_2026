@@ -4,9 +4,9 @@
 
 ## Priority rule
 
-- **P0 — required:** complete offline audio-to-minutes-to-email workflow, multilingual evidence, usable UI, measured target-hardware performance.
-- **P1 — differentiators:** only after every P0 gate passes. Best order: decision revision/replay polish, then speaker labels/correction.
-- **P2 — stretch:** only after P1 is stable. Enrollment, known-voice suggestions, second ASR, live previews.
+- **P0 — required:** audio/video upload and live microphone recording with provisional transcript, complete offline minutes/email workflow, multilingual evidence, usable UI, measured target-hardware performance. Both input modes are required by the team even though the brief permits either.
+- **P1 — differentiators:** only after every P0 gate passes. Best order: AI transcript flags + fast review/replay, decision change-history polish, then speaker labels/correction. See [review spec](07-transcript-review.md) and [judging strategy](08-judging-strategy.md).
+- **P2 — stretch:** only after P1 is stable. Enrollment, known-voice suggestions, second ASR, live decision previews.
 
 If a P0 gate regresses, stop optional work and repair it. A reliable simple solution has priority over the research dossier's complete architecture.
 
@@ -15,20 +15,24 @@ If a P0 gate regresses, stop optional work and repair it. A reliable simple solu
 | ID / owner | Deliverable and target paths | Depends on | Acceptance |
 |---|---|---|---|
 | H01 / A+B | Hardware inventory, contracts and one shared JSON fixture; `contracts/`, `config/` | — | Both developers use identical IDs/fields/errors; actual GPU/backend known |
-| H02 / A | Local service, meeting DB, bounded upload, durable assets/jobs; `services/meeting/{api,storage,jobs}.py` | H01 | New upload survives worker restart; malformed input fails clearly; API remains responsive |
+| H02 / A | Local service, meeting DB, audio/video upload and extraction, durable assets/jobs; `services/meeting/{api,storage,jobs}.py` | H01 | Audio and video yield correct speech track; uploads survive worker restart; malformed/no-audio input fails clearly |
 | H03 / A | ASR adapter, local model registry/profile resolver; `adapters/asr.py`, `models.py`, manifest | H02 | Real RO/RU/EN audio produces timed original text; no runtime download; model switch changes next job only |
 | H04 / B | Browser meeting UI and HTTP client; `src/routes/meetings/`, `src/lib/api/meetings.ts` | H01; integrates H02 | Upload, type/recipient group, progress, transcript, result and errors work outside Tauri |
 | H05 / A | Local LLM extraction, evidence validation, final action reconciliation; `adapters/llm.py`, `decisions.py` | H03; develop first with gold text | Structured actions with owners/dates/nulls; rejected proposal omitted; late confirmed amendment replaces earlier value |
 | H06 / B | Deterministic minutes and local SMTP outbox; `rendering.py`, `delivery.py`, templates, recipients | H01 fixture; integrates H05 | New valid result automatically appears in Mailpit; configured type changes routing; output contains decisions/owners/deadlines |
+| H16 / A+B / P0 | Manual transcript edits, selected-occurrence replacement, preview/undo; `review.py`, meeting review UI/contracts | H02, H04–H06 | Unflagged text editable; source preserved; atomic versioned edits refresh affected minutes and invalidate stale unsent output |
+| H12 / B with A / promoted to P0 | Live capture UI + durable chunk ingest; `capture.py`, meeting UI; A connects incremental ASR | H02–H04; integrate after first H06 flow | Start/Stop, levels, provisional transcript; audio survives ASR failure; Stop produces final minutes/email |
 | H07 / B+A | Offline preparation/preflight/launch, network restrictions, packaged local assets; `scripts/hackathon/` | H02–H06 | Disconnected restart handles new audio and delivers email; missing model fails without network fallback |
 | H08 / A+CEO | Short-set accuracy report and one-hour benchmark; `evaluation/` | H03–H07 | Actual 8 GB run <=900 s or gate remains open; RO/RU/EN and critical errors manually checked; measurements reproducible |
-| H09 / B+CEO | Full browser-to-Mailpit rehearsal; fix errors and misleading states | H07–H08 | New operator completes flow; mail and source-linked results agree; configured safe list is enforced |
+| H09 / B+CEO | Full browser-to-Mailpit rehearsal for upload and live; fix misleading states | H07–H08, H12, H16 | New operator completes both flows and correction; final mail agrees with source; configured safe list is enforced |
 
 Suggested AI task size: implement one row or a narrowly bounded substep. Read the target contracts first. H05 deserves the deepest reasoning/review; avoid spending that effort on styling. New paths are proposed; do not duplicate an equivalent module introduced by another branch.
 
 ### P0 validation specifics
 
 **H02:** source hash and duration preserved; retries do not create duplicate active jobs; job resumes from valid artifacts; path traversal and oversized uploads rejected.
+
+**H12 (task ID, not hour 12):** microphone permission denial, disconnect, long recording, duplicated/missing chunks, server loss, storage failure and ASR crash tested. Audio is saved before inference; persisted duration and transcript progress are distinct. Final chunk is acknowledged before sealing. No unbounded browser/RAM buffer. Provisional text is clearly labeled; final output reconciles the whole meeting. Measure live lag and Stop-to-email independently of uploaded-file timing.
 
 **H03:** output preserves Cyrillic, Romanian diacritics, English terms, silence, and source offsets. Short-window language locking must not erase foreign phrases. Installation/runtime versions and parameters are recorded.
 
@@ -38,16 +42,18 @@ Suggested AI task size: implement one row or a narrowly bounded substep. Read th
 
 **H07:** all frontend assets local, no external fonts/CDNs, no public model IDs that auto-download at runtime, no external mail relay. Verify host and any container boundaries. A disconnected laptop proves no successful WAN exchange during that run; log blocked attempts separately and do not claim a comprehensive security audit.
 
+**H16:** follow [review contract](07-transcript-review.md). Test Unicode offsets, stale revisions, selected-occurrence scope, atomic batch apply, undo and edits racing with delivery. Keep review optional on the unambiguous automatic path; edited or withheld fields cannot leak into a stale MoM.
+
 ## P1 / P2 board
 
 | ID / priority / owner | Addition | Done when |
 |---|---|---|
+| H17 / P1 / A+B | Bounded AI term/error flags + find-like keyboard review + accept selected/all eligible | Exact spans/reasons, alternatives or no candidate, replay, keep/defer, before/after batch preview; measured false flags and reviewer effort |
 | H10 / P1 / A+B | Decision event ledger + replay drawer | Final owner/date links to exact original clip; proposed and superseded values stay auditable |
 | H11 / P1 / A+B | Diarization + participant/turn correction | Anonymous turns, unknown identity, manual mapping, affected owner revalidation all work |
-| H12 / P2 / B with A | Durable live recording | Audio persists before ASR; inference crash does not stop recording; disconnect recovery is explicit |
 | H13 / P2 / A+B | Optional enrollment and saved participant suggestions | Known/unknown held-out tests pass chosen thresholds; deletion and correction work |
 | H14 / P2 / A | Selective second ASR on risky spans | Paired benchmark shows benefit on names/numbers/switches within time budget |
-| H15 / P2 / B | Live provisional captions/decisions, nicer PDF, proof panel | Clearly provisional, offline, does not regress required path or timings |
+| H15 / P2 / B | Live decision previews, nicer PDF, proof panel | Clearly provisional, offline, does not regress required path or timings |
 
 Do not build EHR integration, clinical orders, custom hardware, a graph database, a broad agent with tools, or a large workflow platform for its own sake. If n8n is explicitly required by organizers, add a thin local routing/mail workflow to H06; do not transfer inference/state ownership into an opaque workflow.
 
@@ -66,6 +72,8 @@ Do not build the hour test by repeating one English clip. Keep tuning and held-o
 
 Record: input duration/hash, model artifact hashes, runtime/profile, hardware/driver/RAM, stage seconds, total seconds, peak VRAM/RSS, output count, failed/retried stages, WER by language/mixed condition, critical term/name/number errors, action precision/recall, owner/deadline correctness, unresolved count. If time only permits manual counts, report the denominator and method honestly. No invented confidence percentages.
 
+If H17 is enabled, separately report flag precision/recall, suggestion correctness, wrong changes proposed to correct speech, and review time/interventions. Keep raw ASR, machine-only minutes, and human-reviewed results distinct. A long approval queue can lower UX/output quality scores; disable unhelpful flags rather than counting them as a feature win.
+
 Baseline = same ASR + simple structured extraction. Compare improvements on the same recordings. Proposed quantitative quality cutoffs must be chosen with the team/reviewer; until set and met, publish actual errors instead of saying “clinically accurate.”
 
 ## Stop rules
@@ -82,7 +90,10 @@ Baseline = same ASR + simple structured extraction. Compare improvements on the 
 ## Demo and release checklist
 
 - [ ] P0 H01–H09 verified; actual 8 GB hardware/config recorded.
+- [ ] P0 H12 live mode verified; audio and video upload formats tested, including no-audio video errors.
+- [ ] P0 H16 correction/undo rebuilds consistent minutes; optional H17 demonstrates useful flags without excessive review effort.
 - [ ] One-hour upload-to-email <=900 s measured; cold/warm boundaries explicit.
+- [ ] One-hour live recording preserves audio; ASR lag and Stop-to-email measured separately, finalization <=900 s.
 - [ ] Offline fresh-process run with a new recording; models already installed.
 - [ ] Three languages and genuine switching checked by capable reviewers.
 - [ ] Proposal Monday/Andrei becomes confirmed Wednesday/Elena; rejected purchase stays absent.
@@ -94,4 +105,3 @@ Baseline = same ASR + simple structured extraction. Compare improvements on the 
 - [ ] CEO rehearsed timed pitch; backup recording is labeled as prerecorded, never presented as live.
 
 Winning thesis to demonstrate: **the system preserves the final commitment through multilingual corrections, gives evidence for its output, and completes delivery without the internet**. Winning cannot be guaranteed; measured correctness carries more scoring weight than optional features.
-

@@ -6,7 +6,9 @@
 
 ```mermaid
 flowchart TD
-    WEB[Svelte browser UI] --> API[Local FastAPI service]
+    UPLOAD[Audio or video upload] --> WEB[Svelte browser UI]
+    MIC[Live microphone + provisional transcript] --> WEB
+    WEB --> API[Local FastAPI service]
     TAURI[Optional existing Windows capture client] --> API
     API --> AUDIO[Durable source audio + meeting metadata]
     AUDIO --> JOB[Persistent job queue]
@@ -26,12 +28,28 @@ flowchart TD
 
 Inference may run in child processes to release VRAM cleanly. API stays responsive while jobs run. Use one GPU job at a time; a durable audio file survives worker failures. LAN UI/API/mail are local network traffic; no external endpoints or inference fallback.
 
+## Required input modes
+
+| Mode | Behavior | Timing |
+|---|---|---|
+| Audio upload | Accept tested WAV/MP3/M4A/FLAC formats; decode locally, retain source, index audio | 60-minute source: upload start to local email <=900 seconds |
+| Video upload | Accept tested MP4/WebM containers; select the speech track, extract audio locally without video inference | Same target, including upload/demux/decode; record source size and transfer time |
+| Live microphone | Start/Stop, timer/level, persisted-recording status, provisional timed transcript, then final minutes/email | Measure ongoing ASR lag and Stop-to-email separately; target <=900 seconds after a 60-minute meeting |
+
+Format support is a tested codec/container matrix, not a promise that every file with those extensions decodes. Reject no-audio/corrupt media clearly; let the user choose among multiple audio tracks. No vision model is required. Long files are streamed to disk/decoded in bounded buffers, not loaded completely into RAM. Local video upload size can dominate wall time; benchmark a representative video as well as audio.
+
+Browser capture on the demo host uses `localhost`; LAN browser microphones need trusted HTTPS. Persist sequenced, acknowledged recording chunks continuously before inference. MediaRecorder chunks may depend on earlier container headers: reassemble/demux the ordered stream; do not assume every blob is an independent WAV. Retry duplicates idempotently, detect missing sequences, and limit buffered unacknowledged bytes. If durable recording cannot continue, stop with a visible error rather than pretending audio was saved.
+
+Live ASR consumes completed speech windows from the durable recording, with overlap/padding and stable source offsets. Emit replaceable provisional segments; keep final transcript revisions separate. On the 8 GB GPU, ASR owns the device during capture; final LLM extraction runs after Stop and ASR completion. Reuse valid completed ASR windows, finish any tail/backlog, then reconcile the whole meeting. A second full hour of ASR is not the default finalization step. Inference failure may delay the transcript but must not stop healthy recording.
+
+References: [MediaRecorder chunk behavior](https://developer.mozilla.org/en-US/docs/Web/API/MediaRecorder/start), [microphone secure-context requirements](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia). Browser permission denial, device removal, page close, and server loss need explicit UI states. Guaranteed recording after browser closure is outside the browser MVP; a native capture client can add that later.
+
 ## Reuse / change / add
 
 | Existing asset | Plan |
 |---|---|
 | Svelte project, CSS, UI components | Reuse build system and useful visual primitives; add meeting pages with HTTP API |
-| Tauri source picker/capture | Keep available; add durable recording only after upload P0 works |
+| Tauri source picker/capture | Reuse if needed for native capture; required browser live mode follows first upload integration and persists audio independently |
 | Native Whisper | Keep as existing caption capability/possible later CPU adapter; new batch worker first |
 | SQLite/history ideas | Reuse patterns; separate meeting database so old history/schema are not accidentally migrated |
 | Overlay and appearance settings | Leave intact; not on the competition's critical path |
@@ -43,7 +61,7 @@ Recommended page: `/meetings`. It works in an ordinary browser and can also be o
 ## Proposed additions and ownership
 
 ```text
-src/routes/meetings/                 # Dev B: home, setup, upload, progress, minutes
+src/routes/meetings/                 # Dev B: home, setup, upload/record, progress, minutes
 src/lib/components/meetings/         # Dev B: reusable meeting UI
 src/lib/api/meetings.ts              # Dev B: HTTP client, no Tauri dependency
 contracts/meeting.schema.json        # Dev A owns; both approve changes
@@ -53,8 +71,10 @@ services/meeting/
   contracts.py                      # Dev A: strict validated models
   jobs.py + pipeline.py             # Dev A: persistent states, stage orchestration
   storage.py                        # Dev A: SQLite transactions and assets
+  capture.py                        # Dev B with A: chunk ingest, assembly, recording state
   adapters/asr.py + llm.py           # Dev A: runtime-specific code
   decisions.py                      # Dev A: final state and validation
+  review.py                         # Dev A: versioned edits, bounded issues, invalidation
   models.py                         # Dev A: manifest/profile resolution
   rendering.py + templates/          # Dev B: deterministic minutes
   delivery.py                       # Dev B: local SMTP outbox worker
@@ -85,6 +105,7 @@ All times are integer milliseconds relative to the original asset; meeting date/
 | Segment | ID, revision, asset ID, start/end, original text, optional words/language spans, nullable speaker cluster ID |
 | Action | ID, task, nullable owner and due date, original date expression, status, independent task/owner/date evidence references |
 | Evidence | Segment ID + revision + exact quote + start/end; validate reference and source bounds |
+| ReviewIssue / TranscriptEdit | Exact revision/span, optional suggestions, disposition, actor and batch provenance; see [review contract](07-transcript-review.md) |
 | Event | ID, item ID, kind `propose/confirm/amend/reject/cancel`, sequence, payload, evidence; acceptance assigned by validator |
 | MoM snapshot | Meeting ID, revision, decisions/actions, unresolved items, source/model revisions, canonical content hash |
 | Delivery | Snapshot ID/hash, configured recipient-group version, stable delivery key/Message-ID, attempt count and SMTP status |
@@ -96,7 +117,10 @@ API proposal (freeze exact JSON with fixtures at H0–H2):
 | Route | Behavior |
 |---|---|
 | `POST /api/meetings` | Validates metadata and configured recipient group; creates draft |
-| `POST /api/meetings/{id}/audio` | Bounded upload; safe decode; durable asset + hash |
+| `POST /api/meetings/{id}/audio` | Bounded audio/video upload; safe audio decode; durable source + hash |
+| `POST /api/meetings/{id}/recordings` | Create live recording session with selected MIME/codec and sequence state |
+| `PUT /api/recordings/{id}/chunks/{sequence}` | Idempotent ordered chunk ingest; acknowledge only after durable write |
+| `POST /api/recordings/{id}/stop` | Seal recording after final chunk acknowledgment; finalize existing job |
 | `POST /api/meetings/{id}/jobs` | Validates profile/assets, freezes config, queues processing |
 | `GET /api/jobs/{id}` | State/stage/elapsed/errors; polling is enough initially |
 | `GET /api/meetings/{id}` | Meeting, timed transcript, latest minutes, delivery status |
@@ -106,6 +130,8 @@ API proposal (freeze exact JSON with fixtures at H0–H2):
 | `PATCH /api/meetings/{id}/speakers/{cluster}` | Later: explicit cluster-to-participant mapping |
 
 Job states: `queued -> decoding -> transcribing -> extracting -> validating -> rendering -> delivering -> complete`; any stage can enter `failed`, with a retry from a valid checkpoint. `needs_review` applies only where publication cannot proceed under policy. Distinguish job failure from delivery failure; SMTP retries must not rerun ASR.
+
+Live recording state is independent: `starting -> recording -> stopping -> sealed`, or `interrupted`. ASR can be processing or failed while capture remains healthy. Poll the meeting for provisional segments initially; a new socket protocol is unnecessary for the MVP.
 
 ## AI implementation rules
 
@@ -118,5 +144,6 @@ Job states: `queued -> decoding -> transcribing -> extracting -> validating -> r
 - Delivery transaction binds snapshot hash and recipient group. SMTP timeout after submission is ambiguous: retain stable IDs, show uncertain status, avoid promising exactly-once delivery.
 - Access: loopback single-operator demo first. If opening to LAN, require local authentication and meeting-scoped checks on media/export routes. Keep ports narrow, browser assets local, and inference servers on loopback. Do not claim hospital production readiness.
 - Source edits or speaker changes increment revision and invalidate affected extracted fields/snapshots. A distributed snapshot remains immutable; a correction creates a superseding version.
+- Manual transcript editing/undo is P0; bounded AI error flags are P1. Follow [07](07-transcript-review.md) for keyboard UX, bulk replacement, Unicode spans, stale-edit conflicts, evidence rebuild and delivery races. Unaccepted suggestions never enter authoritative text.
 
 </details>

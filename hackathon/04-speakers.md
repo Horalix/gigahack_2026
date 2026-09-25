@@ -1,6 +1,6 @@
 # Speakers: useful, but after the required pipeline
 
-**Feasible:** automatic speaker separation, manual name assignment, and later optional voice enrollment. **Recommendation:** ship automatic anonymous labels plus correction first. Persistent voice recognition is a stretch feature in 48 hours; diarization itself is a bonus in the challenge.
+**Feasible:** automatic speaker separation, manual name assignment, and later optional voice enrollment. **Recommendation:** within speaker work, ship automatic anonymous labels plus correction first. Across the product, finish P0 and targeted transcript review/replay before diarization. Persistent voice recognition is a stretch feature in 48 hours; diarization itself is a bonus in the challenge.
 
 ## Three different jobs
 
@@ -64,4 +64,3 @@ Suggested profile fields: `person_id`, display name, enrollment status, embeddin
 | Automatic identity | Known and unknown speaker tests quantify false matches; UI has an unknown state and correction |
 
 Tests: one/two/three speakers, unseen speaker, same person on another microphone, overlap, profile swap, mistaken cluster merge, and first-person action attribution. Measure false identity assignments as well as correct matches. If this is unreliable, retain anonymous labels and manual names for the demo.
-
