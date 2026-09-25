@@ -5,3 +5,6 @@ src-tauri/gen
 package-lock.json
 Cargo.lock
 *.pdf
+.tools
+test-results
+playwright-report

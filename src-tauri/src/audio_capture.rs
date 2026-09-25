@@ -186,13 +186,18 @@ impl AudioMeterService {
         }
     }
 
-    pub fn start_mock_meter(
+    pub fn start_capture(
         &self,
         app: AppHandle,
         source_ids: Vec<String>,
         asr_config: Option<AsrRuntimeConfig>,
     ) -> Result<(), AppError> {
         self.stop()?;
+        if source_ids.len() != 1 {
+            return Err(AppError::Audio(
+                "unsupported source selection; choose one source".into(),
+            ));
+        }
 
         if let Some(endpoint_id) = microphone_endpoint_id(&source_ids) {
             return self.start_microphone_meter(app, source_ids, endpoint_id, asr_config);
@@ -202,73 +207,79 @@ impl AudioMeterService {
             return self.start_loopback_meter(app, source_ids, endpoint_id, asr_config);
         }
 
-        self.start_mock_meter_session(app, source_ids)
+        #[cfg(target_os = "windows")]
+        if source_ids.len() == 1 {
+            if let Some(process_id) = crate::application_audio::process_id(&source_ids[0]) {
+                if !crate::application_audio::source_is_alive(&source_ids[0]) {
+                    return Err(AppError::Audio("selected application closed".into()));
+                }
+                return self.start_application_meter(app, source_ids, process_id, asr_config);
+            }
+        }
+        Err(AppError::Audio(
+            "unsupported audio source; select system audio, a microphone, or one application"
+                .into(),
+        ))
     }
 
-    fn start_mock_meter_session(
+    #[cfg(target_os = "windows")]
+    fn start_application_meter(
         &self,
         app: AppHandle,
         source_ids: Vec<String>,
+        process_id: u32,
+        asr_config: Option<AsrRuntimeConfig>,
     ) -> Result<(), AppError> {
-        self.stop()?;
-
         let mut session = self
             .session
             .lock()
             .map_err(|error| AppError::Audio(error.to_string()))?;
         let stop_requested = Arc::new(AtomicBool::new(false));
-        let thread_stop_requested = Arc::clone(&stop_requested);
-        let thread_source_ids = source_ids.clone();
-        let source_offset = source_phase_offset(&source_ids);
-
+        let stop = stop_requested.clone();
         let handle = thread::Builder::new()
-            .name("feelsay-audio-meter".to_string())
+            .name("feelsay-application-audio".into())
             .spawn(move || {
                 let _ = emit_audio_level(
                     &app,
-                    &thread_source_ids,
+                    &source_ids,
                     0.0,
                     AudioLevelStatus::Starting,
-                    true,
+                    false,
                     false,
                     None,
                 );
-
-                let mut tick = source_offset;
-                let mut vad = VoiceActivityDetector::new(VadRuntimeConfig::default());
-                while !thread_stop_requested.load(Ordering::Relaxed) {
-                    tick = (tick + 0.115) % std::f32::consts::TAU;
-                    let level = 0.18 + ((tick.sin() + 1.0) * 0.5 * 0.46);
-                    let speech_detected = vad.update(level);
-                    let _ = emit_audio_level(
-                        &app,
-                        &thread_source_ids,
-                        level,
-                        AudioLevelStatus::Active,
-                        true,
-                        speech_detected,
-                        None,
-                    );
-                    thread::sleep(Duration::from_millis(120));
+                let result =
+                    run_application_capture(&app, &source_ids, process_id, &stop, asr_config);
+                match result {
+                    Ok(()) => {
+                        let _ = emit_audio_level(
+                            &app,
+                            &source_ids,
+                            0.0,
+                            AudioLevelStatus::Idle,
+                            false,
+                            false,
+                            None,
+                        );
+                    }
+                    Err(error) => {
+                        let _ = emit_audio_level(
+                            &app,
+                            &source_ids,
+                            0.0,
+                            AudioLevelStatus::Error,
+                            false,
+                            false,
+                            Some(error.user_message()),
+                        );
+                    }
                 }
-
-                let _ = emit_audio_level(
-                    &app,
-                    &thread_source_ids,
-                    0.0,
-                    AudioLevelStatus::Idle,
-                    true,
-                    false,
-                    None,
-                );
             })
             .map_err(|error| AppError::Audio(error.to_string()))?;
-
-        *session = Some(MeterSession::Mock(MockAudioMeterSession {
+        *session = Some(MeterSession::Microphone(RealAudioMeterSession {
             stop_requested,
             handle: Some(handle),
         }));
-
         Ok(())
     }
 
@@ -408,37 +419,14 @@ impl Default for AudioMeterService {
 }
 
 enum MeterSession {
-    Mock(MockAudioMeterSession),
     Microphone(RealAudioMeterSession),
 }
 
 impl AudioCaptureSession for MeterSession {
     fn stop(&mut self) {
         match self {
-            Self::Mock(session) => session.stop(),
             Self::Microphone(session) => session.stop(),
         }
-    }
-}
-
-struct MockAudioMeterSession {
-    stop_requested: Arc<AtomicBool>,
-    handle: Option<JoinHandle<()>>,
-}
-
-impl AudioCaptureSession for MockAudioMeterSession {
-    fn stop(&mut self) {
-        self.stop_requested.store(true, Ordering::Relaxed);
-
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
-    }
-}
-
-impl Drop for MockAudioMeterSession {
-    fn drop(&mut self) {
-        self.stop();
     }
 }
 
@@ -483,16 +471,6 @@ fn emit_audio_level(
             message,
         },
     )
-}
-
-fn source_phase_offset(source_ids: &[String]) -> f32 {
-    let offset = source_ids
-        .iter()
-        .flat_map(|source_id| source_id.bytes())
-        .fold(0u32, |sum, byte| sum.wrapping_add(byte as u32))
-        % 53;
-
-    (offset as f32 / 53.0) * std::f32::consts::TAU
 }
 
 fn microphone_endpoint_id(source_ids: &[String]) -> Option<String> {
@@ -701,45 +679,43 @@ unsafe fn capture_audio_levels(
             IAudioCaptureClient, IAudioClient, AUDCLNT_SHAREMODE_SHARED,
             AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_NOPERSIST,
         },
-        System::Com::{CoTaskMemFree, CLSCTX_ALL},
+        System::Com::CLSCTX_ALL,
     };
 
     let audio_client = device
         .Activate::<IAudioClient>(CLSCTX_ALL, None)
         .map_err(|error| AppError::Audio(error.to_string()))?;
-    let mix_format = audio_client
-        .GetMixFormat()
-        .map_err(|error| AppError::Audio(error.to_string()))?;
-    let format = *mix_format;
-    let stream_flags = if loopback {
-        AUDCLNT_STREAMFLAGS_NOPERSIST | AUDCLNT_STREAMFLAGS_LOOPBACK
-    } else {
-        AUDCLNT_STREAMFLAGS_NOPERSIST
+    // Request a known PCM format; WASAPI performs shared-mode conversion.
+    let format = windows::Win32::Media::Audio::WAVEFORMATEX {
+        wFormatTag: 1,
+        nChannels: 2,
+        nSamplesPerSec: 48_000,
+        nAvgBytesPerSec: 192_000,
+        nBlockAlign: 4,
+        wBitsPerSample: 16,
+        cbSize: 0,
     };
-
+    let stream_flags = AUDCLNT_STREAMFLAGS_NOPERSIST
+        | windows::Win32::Media::Audio::AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+        | if loopback {
+            AUDCLNT_STREAMFLAGS_LOOPBACK
+        } else {
+            0
+        };
     audio_client
         .Initialize(
             AUDCLNT_SHAREMODE_SHARED,
             stream_flags,
             1_000_000,
             0,
-            mix_format,
+            &format,
             None,
         )
-        .map_err(|error| {
-            CoTaskMemFree(Some(mix_format.cast::<c_void>()));
-            AppError::Audio(error.to_string())
-        })?;
-
-    CoTaskMemFree(Some(mix_format.cast::<c_void>()));
+        .map_err(|error| AppError::Audio(error.to_string()))?;
 
     let capture_client = audio_client
         .GetService::<IAudioCaptureClient>()
         .map_err(|error| AppError::Audio(error.to_string()))?;
-    audio_client
-        .Start()
-        .map_err(|error| AppError::Audio(error.to_string()))?;
-
     let result = poll_microphone_packets(
         app,
         source_ids,
@@ -856,11 +832,61 @@ unsafe fn capture_loopback_samples(
 }
 
 #[cfg(target_os = "windows")]
+fn run_application_capture(
+    app: &AppHandle,
+    source_ids: &[String],
+    process_id: u32,
+    stop: &AtomicBool,
+    config: Option<AsrRuntimeConfig>,
+) -> Result<(), AppError> {
+    use windows::Win32::{
+        Media::Audio::*,
+        System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED},
+    };
+    unsafe {
+        CoInitializeEx(None, COINIT_MULTITHREADED)
+            .ok()
+            .map_err(|error| AppError::Audio(error.to_string()))?;
+        let result = (|| {
+            let client = crate::application_audio::activate(process_id)?;
+            let format = WAVEFORMATEX {
+                wFormatTag: 1,
+                nChannels: 2,
+                nSamplesPerSec: 48_000,
+                nAvgBytesPerSec: 192_000,
+                nBlockAlign: 4,
+                wBitsPerSample: 16,
+                cbSize: 0,
+            };
+            client
+                .Initialize(
+                    AUDCLNT_SHAREMODE_SHARED,
+                    AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+                    1_000_000,
+                    0,
+                    &format,
+                    None,
+                )
+                .map_err(|error| AppError::Audio(error.to_string()))?;
+            let capture = client
+                .GetService::<IAudioCaptureClient>()
+                .map_err(|error| AppError::Audio(error.to_string()))?;
+            let result =
+                poll_microphone_packets(app, source_ids, stop, &client, &capture, format, config);
+            let _ = client.Stop();
+            result
+        })();
+        CoUninitialize();
+        result
+    }
+}
+
+#[cfg(target_os = "windows")]
 unsafe fn poll_microphone_packets(
     app: &AppHandle,
     source_ids: &[String],
     stop_requested: &AtomicBool,
-    _audio_client: &windows::Win32::Media::Audio::IAudioClient,
+    audio_client: &windows::Win32::Media::Audio::IAudioClient,
     capture_client: &windows::Win32::Media::Audio::IAudioCaptureClient,
     format: windows::Win32::Media::Audio::WAVEFORMATEX,
     asr_config: Option<AsrRuntimeConfig>,
@@ -873,17 +899,81 @@ unsafe fn poll_microphone_packets(
         .map(|config| config.performance.vad)
         .unwrap_or_default();
     let mut vad = VoiceActivityDetector::new(vad_config);
+    let default_output = if source_ids.iter().any(|id| id == SYSTEM_AUDIO_SOURCE_ID) {
+        Some(default_output_id()?)
+    } else {
+        None
+    };
     let asr_worker = match asr_config {
         Some(config) => Some(AsrCaptureWorker::start(config)?),
         None => None,
     };
-
+    if stop_requested.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    audio_client
+        .Start()
+        .map_err(|error| AppError::Audio(error.to_string()))?;
+    let _ = emit_audio_level(
+        app,
+        source_ids,
+        0.0,
+        AudioLevelStatus::Active,
+        false,
+        false,
+        None,
+    );
+    let mut last_meter_emit = Instant::now();
+    let mut last_packet = Instant::now();
+    let mut last_source_check = Instant::now();
     while !stop_requested.load(Ordering::Relaxed) {
+        if let Some(error) = asr_worker.as_ref().and_then(AsrCaptureWorker::take_error) {
+            return Err(error);
+        }
+        if last_source_check.elapsed() >= Duration::from_secs(1) {
+            last_source_check = Instant::now();
+            if let Some(original) = &default_output {
+                if default_output_id()? != *original {
+                    return Err(AppError::Audio("default output changed".into()));
+                }
+            }
+            if source_ids.first().is_some_and(|source| {
+                source.starts_with("window:") && !crate::application_audio::source_is_alive(source)
+            }) {
+                return Err(AppError::Audio("selected application closed".into()));
+            }
+        }
         let mut packet_size = capture_client
             .GetNextPacketSize()
             .map_err(|error| AppError::Audio(error.to_string()))?;
 
         if packet_size == 0 {
+            if last_packet.elapsed() >= Duration::from_millis(100) {
+                if let Some(worker) = &asr_worker {
+                    worker.push_frame(
+                        &PcmAudioFrame {
+                            source_ids: Vec::new(),
+                            samples: Vec::new(),
+                            sample_rate: 16_000,
+                            channels: 1,
+                            timestamp_ms: current_timestamp_ms(),
+                        },
+                        false,
+                    );
+                }
+                if last_meter_emit.elapsed() >= Duration::from_millis(100) {
+                    let _ = emit_audio_level(
+                        app,
+                        source_ids,
+                        0.0,
+                        AudioLevelStatus::Active,
+                        false,
+                        false,
+                        None,
+                    );
+                    last_meter_emit = Instant::now();
+                }
+            }
             thread::sleep(Duration::from_millis(35));
             continue;
         }
@@ -909,18 +999,33 @@ unsafe fn poll_microphone_packets(
                 .ReleaseBuffer(frames)
                 .map_err(|error| AppError::Audio(error.to_string()))?;
             let speech_detected = vad.update(level);
+            last_packet = Instant::now();
             if let (Some(worker), Some(frame)) = (asr_worker.as_ref(), frame) {
                 worker.push_frame(frame, speech_detected);
+            } else if let Some(worker) = &asr_worker {
+                worker.push_frame(
+                    &PcmAudioFrame {
+                        source_ids: Vec::new(),
+                        samples: Vec::new(),
+                        sample_rate: 16_000,
+                        channels: 1,
+                        timestamp_ms: current_timestamp_ms(),
+                    },
+                    false,
+                );
             }
-            let _ = emit_audio_level(
-                app,
-                source_ids,
-                level,
-                AudioLevelStatus::Active,
-                false,
-                speech_detected,
-                None,
-            );
+            if last_meter_emit.elapsed() >= Duration::from_millis(100) {
+                let _ = emit_audio_level(
+                    app,
+                    source_ids,
+                    level,
+                    AudioLevelStatus::Active,
+                    false,
+                    speech_detected,
+                    None,
+                );
+                last_meter_emit = Instant::now();
+            }
 
             packet_size = capture_client
                 .GetNextPacketSize()
@@ -929,6 +1034,30 @@ unsafe fn poll_microphone_packets(
     }
 
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn default_output_id() -> Result<String, AppError> {
+    use windows::Win32::{
+        Media::Audio::{eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator},
+        System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL},
+    };
+    unsafe {
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                .map_err(|error| AppError::Audio(error.to_string()))?;
+        let endpoint = enumerator
+            .GetDefaultAudioEndpoint(eRender, eConsole)
+            .map_err(|error| AppError::Audio(error.to_string()))?;
+        let id = endpoint
+            .GetId()
+            .map_err(|error| AppError::Audio(error.to_string()))?;
+        let value = id
+            .to_string()
+            .map_err(|error| AppError::Audio(error.to_string()));
+        CoTaskMemFree(Some(id.0.cast()));
+        value
+    }
 }
 
 #[cfg(target_os = "windows")]

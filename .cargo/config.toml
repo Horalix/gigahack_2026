@@ -1,0 +1,12 @@
+[env]
+# Keep release binaries portable across modern Windows PCs.
+GGML_NATIVE = "OFF"
+# Bundle the C++ standard library in the executable; no end-user VC++ setup.
+CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded"
+CMAKE_POLICY_DEFAULT_CMP0091 = "NEW"
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[build]
+jobs = 2

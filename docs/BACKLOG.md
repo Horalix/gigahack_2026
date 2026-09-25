@@ -1,5 +1,7 @@
 # Product Backlog
 
+Historical planning record. Completion checkboxes here are not release evidence; current implementation and validation are tracked in [project status](PROJECT_STATUS.md).
+
 Priority levels:
 
 - **P0**: Required before real captioning can be trusted.

@@ -19,6 +19,7 @@ export type ModelSettingsStore = {
 };
 
 export type ModelStatus = {
+  downloadProgress: number | null;
   activeModel?: ModelMetadata | null;
   modelsDir: string;
   isReady: boolean;

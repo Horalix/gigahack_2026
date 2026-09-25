@@ -18,10 +18,17 @@ jobs:
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - run: npm ci
+      - name: Install build-only libclang
+        run: python -m pip install --target .tools/python libclang==18.1.1
       - run: npm run format:check
       - run: npm run lint
       - run: npm run build
-      - run: npm run rust:lint
-      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - run: npm run test:ui
+      - run: ./scripts/windows-build.ps1 -Task lint -Release
+      - run: ./scripts/windows-build.ps1 -Task test -Release
+      - run: ./scripts/windows-build.ps1 -Task package
+      - run: npm run test:native-overlay

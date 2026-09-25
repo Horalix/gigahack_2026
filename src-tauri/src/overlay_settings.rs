@@ -1,15 +1,23 @@
 use crate::app_error::AppError;
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 const FILE_NAME: &str = "overlay-settings.json";
 const RUNTIME_FILE_NAME: &str = "overlay-settings-runtime.json";
 const PROFILE_COUNT: usize = 5;
+fn default_always_on_top() -> bool {
+    true
+}
 
 #[derive(Debug, Clone)]
 pub struct OverlaySettingsService {
     path: PathBuf,
     runtime_path: PathBuf,
+    writer: Arc<Mutex<()>>,
 }
 
 impl OverlaySettingsService {
@@ -17,6 +25,7 @@ impl OverlaySettingsService {
         Self {
             path: data_dir.join(FILE_NAME),
             runtime_path: data_dir.join(RUNTIME_FILE_NAME),
+            writer: Arc::new(Mutex::new(())),
         }
     }
 
@@ -25,9 +34,10 @@ impl OverlaySettingsService {
     }
 
     pub fn save(&self, settings: OverlaySettings) -> Result<OverlaySettings, AppError> {
+        let _guard = self.writer.lock().unwrap();
         let mut store = self.load_store()?;
         store.set_active_settings(settings);
-        let store = self.save_store(store)?;
+        let store = self.write_store(store)?;
         Ok(store.active_settings().clone())
     }
 
@@ -52,6 +62,11 @@ impl OverlaySettingsService {
         &self,
         store: OverlaySettingsStore,
     ) -> Result<OverlaySettingsStore, AppError> {
+        let _guard = self.writer.lock().unwrap();
+        self.write_store(store)
+    }
+
+    fn write_store(&self, store: OverlaySettingsStore) -> Result<OverlaySettingsStore, AppError> {
         let store = store.normalized();
 
         if let Some(parent) = self.path.parent() {
@@ -60,7 +75,7 @@ impl OverlaySettingsService {
 
         let content = serde_json::to_string_pretty(&store)
             .map_err(|error| AppError::Io(error.to_string()))?;
-        fs::write(&self.path, content)?;
+        crate::persistence::write_bytes(&self.path, content.as_bytes())?;
         self.write_runtime_settings(store.active_settings())?;
 
         Ok(store)
@@ -70,23 +85,72 @@ impl OverlaySettingsService {
         &self,
         profile_id: OverlayProfileId,
     ) -> Result<OverlaySettingsStore, AppError> {
+        let _guard = self.writer.lock().unwrap();
         let mut store = self.load_store()?;
         store.active_profile_id = profile_id;
-        self.save_store(store)
+        self.write_store(store)
+    }
+
+    pub fn patch(
+        &self,
+        profile_id: Option<OverlayProfileId>,
+        patch: serde_json::Value,
+    ) -> Result<OverlaySettingsStore, AppError> {
+        let _guard = self.writer.lock().unwrap();
+        let mut store = self.load_store()?;
+        let id = profile_id.unwrap_or(store.active_profile_id);
+        let profile = store
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.id == id)
+            .ok_or_else(|| AppError::Io("Overlay profile is unavailable.".into()))?;
+        let mut settings = serde_json::to_value(&profile.settings)
+            .map_err(|error| AppError::Io(error.to_string()))?;
+        let fields = patch
+            .as_object()
+            .ok_or_else(|| AppError::Io("Invalid overlay settings change.".into()))?;
+        for (key, value) in fields {
+            let target = settings
+                .get_mut(key)
+                .ok_or_else(|| AppError::Io("Unknown overlay setting.".into()))?;
+            *target = value.clone();
+        }
+        profile.settings = serde_json::from_value::<OverlaySettings>(settings)
+            .map_err(|error| AppError::Io(error.to_string()))?
+            .normalized();
+        self.write_store(store)
+    }
+
+    pub fn toggle_click_through(&self) -> Result<bool, AppError> {
+        let _guard = self.writer.lock().unwrap();
+        let mut store = self.load_store()?;
+        let mut settings = store.active_settings().clone();
+        settings.click_through = !settings.click_through;
+        let enabled = settings.click_through;
+        store.set_active_settings(settings);
+        self.write_store(store)?;
+        Ok(enabled)
     }
 
     pub fn runtime_settings_path(&self) -> &std::path::Path {
         &self.runtime_path
     }
 
-    pub fn write_runtime_settings(&self, settings: &OverlaySettings) -> Result<(), AppError> {
+    pub fn prepare_overlay(&self) -> Result<OverlaySettings, AppError> {
+        let _guard = self.writer.lock().unwrap();
+        let settings = self.load()?;
+        self.write_runtime_settings(&settings)?;
+        Ok(settings)
+    }
+
+    fn write_runtime_settings(&self, settings: &OverlaySettings) -> Result<(), AppError> {
         if let Some(parent) = self.runtime_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
         let content = serde_json::to_string_pretty(&settings.clone().normalized())
             .map_err(|error| AppError::Io(error.to_string()))?;
-        fs::write(&self.runtime_path, content)?;
+        crate::persistence::write_bytes(&self.runtime_path, content.as_bytes())?;
         Ok(())
     }
 }
@@ -227,6 +291,8 @@ impl OverlayProfileId {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlaySettings {
+    #[serde(default = "default_always_on_top")]
+    pub always_on_top: bool,
     pub font_family: String,
     pub font_size: u32,
     pub font_weight: FontWeight,
@@ -270,6 +336,7 @@ impl OverlayPlacement {
 impl Default for OverlaySettings {
     fn default() -> Self {
         Self {
+            always_on_top: true,
             font_family: "Segoe UI".to_string(),
             font_size: 42,
             font_weight: FontWeight::Bold,
@@ -301,8 +368,8 @@ impl OverlaySettings {
         self.background_opacity = self.background_opacity.clamp(0.0, 1.0);
         self.outline_color = normalize_color(&self.outline_color).unwrap_or(defaults.outline_color);
         self.outline_width = self.outline_width.clamp(0, 8);
-        self.start_width = self.start_width.clamp(300, 1800);
-        self.start_height = self.start_height.clamp(80, 600);
+        self.start_width = self.start_width.clamp(280, 3840);
+        self.start_height = self.start_height.clamp(110, 1200);
 
         self
     }
@@ -400,4 +467,46 @@ fn normalize_rgb_color(value: &str) -> Option<String> {
     }
 
     Some(format!("#{red:02x}{green:02x}{blue:02x}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn simultaneous_geometry_and_appearance_edits_survive_reload() {
+        let directory =
+            std::env::temp_dir().join(format!("feelsay-overlay-patch-{}", std::process::id()));
+        let service = OverlaySettingsService::new(directory.clone());
+        let geometry = service.clone();
+        let appearance = service.clone();
+        let first = std::thread::spawn(move || {
+            geometry
+                .patch(None, serde_json::json!({"startX": -800, "startWidth": 600}))
+                .unwrap()
+        });
+        let second = std::thread::spawn(move || {
+            appearance
+                .patch(
+                    None,
+                    serde_json::json!({"fontSize": 58, "textColor": "#ffff80"}),
+                )
+                .unwrap()
+        });
+        first.join().unwrap();
+        second.join().unwrap();
+        let saved = OverlaySettingsService::new(directory.clone())
+            .load()
+            .unwrap();
+        assert_eq!(saved.start_x, Some(-800));
+        assert_eq!(saved.start_width, 600);
+        assert_eq!(saved.font_size, 58);
+        assert_eq!(saved.text_color, "#ffff80");
+        let runtime: OverlaySettings =
+            serde_json::from_str(&fs::read_to_string(&service.runtime_path).unwrap()).unwrap();
+        assert_eq!(runtime.font_size, saved.font_size);
+        assert_eq!(runtime.start_x, saved.start_x);
+        fs::remove_file(service.path).unwrap();
+        fs::remove_file(service.runtime_path).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
 }

@@ -13,17 +13,23 @@ pub enum AppError {
 impl AppError {
     pub fn user_message(&self) -> String {
         match self {
+            Self::Audio(message) if mentions(message, &["default output changed"]) => {
+                "Your playback device changed. Press Start to use the new device.".into()
+            }
+            Self::Audio(message) if mentions(message, &["application closed"]) => {
+                "The selected application closed. Open it and select it again, or use system audio.".into()
+            }
             Self::Asr(message) if mentions(message, &["translation requires", "multilingual"]) => {
-                "Translation needs a multilingual Whisper model. Open Settings -> Model and install the default ASR assets.".to_string()
+                "Translation needs the multilingual speech model. Open Settings → Captions and repair the speech model.".to_string()
             }
             Self::Asr(message) if mentions(message, &["executable", "whisper.cpp"]) => {
-                "Whisper is not ready. Open Settings -> Model and install the default ASR assets or set the whisper.cpp executable.".to_string()
+                "Speech recognition is not ready. Open Settings → Captions and download the speech model.".to_string()
             }
             Self::Asr(message) if mentions(message, &["model file", "missing model", "does not exist"]) => {
-                "The ASR model is missing. Open Settings -> Model and install the default model or choose an existing GGML model.".to_string()
+                "The speech model is missing. Open Settings → Captions and download the speech model.".to_string()
             }
             Self::Asr(_) => {
-                "Local transcription failed. Check Settings -> Model, then try the caption flow test.".to_string()
+                "Speech recognition stopped. Open Settings → Captions and repair the speech model, then try again.".to_string()
             }
             Self::Audio(message) if mentions(message, &["device", "endpoint", "not found"]) => {
                 "The selected audio device is not available. Select a different source or reconnect the device.".to_string()
@@ -37,6 +43,7 @@ impl AppError {
             Self::Io(message) if mentions(message, &["permission", "access", "denied"]) => {
                 "Feelsay could not access local app data. Check folder permissions and try again.".to_string()
             }
+            Self::Io(message) if message.starts_with("Speech model ") || message.starts_with("Transcript ") => message.clone(),
             Self::Io(_) => {
                 "Feelsay could not read or write local app data. Restart the app and try again.".to_string()
             }
@@ -131,8 +138,8 @@ mod tests {
     fn asr_model_errors_include_recovery_action() {
         let message = AppError::Asr("model file does not exist".to_string()).user_message();
 
-        assert!(message.contains("Settings -> Model"));
-        assert!(message.contains("install"));
+        assert!(message.contains("Settings → Captions"));
+        assert!(message.contains("download"));
     }
 
     #[test]

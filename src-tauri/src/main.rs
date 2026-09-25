@@ -2,6 +2,19 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        let _ = windows::Win32::UI::HiDpi::SetProcessDpiAwarenessContext(
+            windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        );
+    }
+    #[cfg(target_os = "windows")]
+    if diagnostic_arg_value("--overlay-render-test").is_some() {
+        let caption_file =
+            std::env::var_os("FEELSAY_CAPTION_TEXT_FILE").map(std::path::PathBuf::from);
+        run_caption_window_child(overlay_settings_from_env(), None, None, caption_file);
+        return;
+    }
     if std::env::args().any(|arg| arg == "--asr-diagnostic") {
         run_asr_diagnostic_command(AsrDiagnosticMode::Direct);
         return;
@@ -185,7 +198,7 @@ fn run_caption_window_child(
     use feelsay_lib::overlay_settings::{hex_to_rgb, OverlayPlacement, OverlaySettings};
     use std::{
         cell::{Cell, RefCell},
-        time::SystemTime,
+        time::{Duration, Instant, SystemTime},
     };
     use windows::{
         core::{w, PCWSTR},
@@ -194,24 +207,27 @@ fn run_caption_window_child(
             Graphics::Gdi::{
                 BeginPaint, CreateCompatibleDC, CreateDIBSection, CreateFontW, CreatePen,
                 CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, Ellipse, EndPaint,
-                GetMonitorInfoW, MonitorFromWindow, SelectObject, SetBkMode, SetTextColor,
-                AC_SRC_ALPHA, AC_SRC_OVER, ANTIALIASED_QUALITY, BITMAPINFO, BI_RGB,
-                CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, DRAW_TEXT_FORMAT, DT_CENTER,
-                DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, HDC, MONITORINFO,
+                GetMonitorInfoW, MonitorFromRect, MonitorFromWindow, SelectObject, SetBkMode,
+                SetTextColor, AC_SRC_ALPHA, AC_SRC_OVER, ANTIALIASED_QUALITY, BITMAPINFO, BI_RGB,
+                CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, DRAW_TEXT_FORMAT,
+                DT_CALCRECT, DT_CENTER, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, HDC, MONITORINFO,
                 MONITOR_DEFAULTTONEAREST, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, TRANSPARENT,
             },
             UI::WindowsAndMessaging::{
-                CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
-                GetCursorPos, GetMessageW, GetWindowLongPtrW, GetWindowRect, KillTimer,
-                PostQuitMessage, RegisterClassW, SetTimer, SetWindowLongPtrW, SetWindowPos,
-                TranslateMessage, UpdateLayeredWindow, CREATESTRUCTW, CW_USEDEFAULT, GWLP_USERDATA,
-                GWL_EXSTYLE, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT,
-                HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HWND_TOPMOST, MSG, SWP_NOACTIVATE,
-                SWP_NOMOVE, SWP_NOSIZE, ULW_ALPHA, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE,
-                WM_DESTROY, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_LBUTTONUP, WM_MOVE, WM_MOVING,
-                WM_NCCALCSIZE, WM_NCHITTEST, WM_PAINT, WM_SIZE, WM_TIMER, WNDCLASSW,
-                WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX,
-                WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
+                AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
+                DestroyWindow, DispatchMessageW, GetClientRect, GetCursorPos, GetMessageW,
+                GetWindowLongPtrW, GetWindowRect, KillTimer, PostQuitMessage, RegisterClassW,
+                SetTimer, SetWindowLongPtrW, SetWindowPos, TrackPopupMenu, TranslateMessage,
+                UpdateLayeredWindow, CREATESTRUCTW, GWLP_USERDATA, GWL_EXSTYLE, HTBOTTOM,
+                HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP,
+                HTTOPLEFT, HTTOPRIGHT, HWND_NOTOPMOST, HWND_TOPMOST, MA_NOACTIVATE, MF_CHECKED,
+                MF_STRING, MINMAXINFO, MSG, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, TPM_NONOTIFY,
+                TPM_RETURNCMD, TPM_RIGHTALIGN, ULW_ALPHA, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE,
+                WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_GETMINMAXINFO,
+                WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOVE, WM_MOVING, WM_NCCALCSIZE, WM_NCHITTEST,
+                WM_PAINT, WM_SIZE, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+                WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WS_THICKFRAME,
+                WS_VISIBLE,
             },
         },
     };
@@ -227,6 +243,11 @@ fn run_caption_window_child(
     const CAPTION_STALE_MS: u64 = 4500;
 
     struct CaptionWindowState {
+        parent_process: Option<windows::Win32::Foundation::HANDLE>,
+        render_test_path: Option<std::path::PathBuf>,
+        transcript_saving: Cell<bool>,
+        control_error: RefCell<Option<String>>,
+        control_polled: Cell<Option<Instant>>,
         settings: RefCell<OverlaySettings>,
         placement_file: Option<std::path::PathBuf>,
         settings_file: Option<std::path::PathBuf>,
@@ -263,6 +284,30 @@ fn run_caption_window_child(
                 LRESULT(0)
             }
             WM_NCCALCSIZE => LRESULT(0),
+            WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+            WM_GETMINMAXINFO => {
+                unsafe {
+                    let info = &mut *(lparam.0 as *mut MINMAXINFO);
+                    info.ptMinTrackSize = POINT { x: 280, y: 110 };
+                }
+                LRESULT(0)
+            }
+            WM_DPICHANGED => {
+                unsafe {
+                    let rect = &*(lparam.0 as *const RECT);
+                    let _ = SetWindowPos(
+                        hwnd,
+                        None,
+                        rect.left,
+                        rect.top,
+                        rect.right - rect.left,
+                        rect.bottom - rect.top,
+                        SWP_NOACTIVATE,
+                    );
+                    render_caption(hwnd);
+                }
+                LRESULT(0)
+            }
             WM_NCHITTEST => unsafe { hit_test_caption_window(hwnd, lparam) },
             WM_ERASEBKGND => LRESULT(1),
             WM_SIZE => {
@@ -288,14 +333,25 @@ fn run_caption_window_child(
             WM_EXITSIZEMOVE => {
                 unsafe {
                     reset_snap_state(hwnd);
+                    persist_overlay_geometry(hwnd);
                 }
                 LRESULT(0)
             }
             WM_TIMER => {
                 if wparam.0 == SETTINGS_TIMER_ID {
                     unsafe {
+                        if let Some(state) = caption_state(hwnd) {
+                            if state.parent_process.is_some_and(|handle| {
+                                windows::Win32::System::Threading::WaitForSingleObject(handle, 0)
+                                    != windows::Win32::Foundation::WAIT_TIMEOUT
+                            }) {
+                                let _ = DestroyWindow(hwnd);
+                                return LRESULT(0);
+                            }
+                        }
                         reload_settings_if_changed(hwnd);
                         reload_caption_if_changed(hwnd);
+                        refresh_controls(hwnd);
                     }
                     return LRESULT(0);
                 }
@@ -317,7 +373,11 @@ fn run_caption_window_child(
                     let _ = KillTimer(Some(hwnd), SETTINGS_TIMER_ID);
                     let state = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                     if state != 0 {
-                        drop(Box::from_raw(state as *mut CaptionWindowState));
+                        let state = Box::from_raw(state as *mut CaptionWindowState);
+                        if let Some(handle) = state.parent_process {
+                            let _ = windows::Win32::Foundation::CloseHandle(handle);
+                        }
+                        drop(state);
                     }
                     PostQuitMessage(0);
                 }
@@ -336,7 +396,7 @@ fn run_caption_window_child(
             return LRESULT(HTCAPTION as isize);
         }
 
-        if is_placement_mode(hwnd) && screen_point_in_set_button(window_rect, cursor_x, cursor_y) {
+        if screen_point_in_set_button(window_rect, cursor_x, cursor_y) {
             return LRESULT(HTCLIENT as isize);
         }
 
@@ -370,7 +430,17 @@ fn run_caption_window_child(
 
     unsafe fn handle_click(hwnd: HWND, lparam: LPARAM) -> LRESULT {
         if !is_placement_mode(hwnd) {
-            return DefWindowProcW(hwnd, WM_LBUTTONUP, WPARAM(0), lparam);
+            let mut rect = RECT::default();
+            if GetClientRect(hwnd, &mut rect).is_ok()
+                && client_point_in_rect(
+                    lparam_low_word(lparam),
+                    lparam_high_word(lparam),
+                    set_button_rect(rect),
+                )
+            {
+                show_compact_controls(hwnd);
+            }
+            return LRESULT(0);
         }
 
         let mut client_rect = RECT::default();
@@ -389,11 +459,141 @@ fn run_caption_window_child(
         LRESULT(0)
     }
 
+    unsafe fn refresh_controls(hwnd: HWND) {
+        let Some(state) = caption_state(hwnd) else {
+            return;
+        };
+        if state.placement_file.is_some()
+            || state
+                .control_polled
+                .get()
+                .is_some_and(|time| time.elapsed() < Duration::from_secs(1))
+        {
+            return;
+        }
+        state.control_polled.set(Some(Instant::now()));
+        match feelsay_lib::overlay_control::request(None, None) {
+            Ok(status) => {
+                state
+                    .transcript_saving
+                    .set(status.transcript.saving_enabled);
+                state
+                    .control_error
+                    .replace(status.error.or(status.transcript.error));
+            }
+            Err(_) => {
+                state
+                    .control_error
+                    .replace(Some("Controls unavailable — check the main window".into()));
+            }
+        }
+        render_caption(hwnd);
+    }
+
+    unsafe fn persist_overlay_geometry(hwnd: HWND) {
+        let Some(state) = caption_state(hwnd) else {
+            return;
+        };
+        if state.placement_file.is_some() {
+            return;
+        }
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return;
+        }
+        let patch = serde_json::json!({"startX": rect.left, "startY": rect.top, "startWidth": (rect.right - rect.left).max(280), "startHeight": (rect.bottom - rect.top).max(110)});
+        if let Ok(status) = feelsay_lib::overlay_control::request(None, Some(patch)) {
+            state.settings.replace(status.settings);
+        }
+    }
+
+    unsafe fn show_compact_controls(hwnd: HWND) {
+        let Some(state) = caption_state(hwnd) else {
+            return;
+        };
+        state.control_polled.set(None);
+        refresh_controls(hwnd);
+        let Ok(menu) = CreatePopupMenu() else {
+            return;
+        };
+        let flags = if state.transcript_saving.get() {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
+        let _ = AppendMenuW(menu, flags, 1, w!("Save transcript locally"));
+        for (id, label) in [
+            (2, "Larger text"),
+            (3, "Smaller text"),
+            (4, "Darker background"),
+            (5, "Lighter background"),
+            (6, "White text"),
+            (7, "Yellow text"),
+            (8, "Black background"),
+            (9, "Blue background"),
+        ] {
+            let label: Vec<u16> = label.encode_utf16().chain(Some(0)).collect();
+            let _ = AppendMenuW(menu, MF_STRING, id, PCWSTR(label.as_ptr()));
+        }
+        let mut cursor = POINT::default();
+        let _ = GetCursorPos(&mut cursor);
+        let selected = TrackPopupMenu(
+            menu,
+            TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTALIGN,
+            cursor.x,
+            cursor.y,
+            None,
+            hwnd,
+            None,
+        )
+        .0;
+        let _ = DestroyMenu(menu);
+        if selected == 0 {
+            return;
+        }
+        let settings = state.settings.borrow().clone();
+        let saving = if selected == 1 {
+            Some(!state.transcript_saving.get())
+        } else {
+            None
+        };
+        let patch = match selected {
+            2 => serde_json::json!({"fontSize": settings.font_size + 4}),
+            3 => serde_json::json!({"fontSize": settings.font_size.saturating_sub(4)}),
+            4 => serde_json::json!({"backgroundOpacity": settings.background_opacity + 0.1}),
+            5 => serde_json::json!({"backgroundOpacity": settings.background_opacity - 0.1}),
+            6 => serde_json::json!({"textColor": "#ffffff"}),
+            7 => serde_json::json!({"textColor": "#ffff80"}),
+            8 => serde_json::json!({"backgroundColor": "#000000"}),
+            9 => serde_json::json!({"backgroundColor": "#101b30"}),
+            _ => serde_json::json!({}),
+        };
+        match feelsay_lib::overlay_control::request(saving, (selected != 1).then_some(patch)) {
+            Ok(status) => {
+                state
+                    .transcript_saving
+                    .set(status.transcript.saving_enabled);
+                state
+                    .control_error
+                    .replace(status.error.or(status.transcript.error));
+                state.settings.replace(status.settings);
+            }
+            Err(_) => {
+                state
+                    .control_error
+                    .replace(Some("Change not confirmed — check Settings".into()));
+            }
+        }
+        render_caption(hwnd);
+    }
+
     unsafe fn render_caption(hwnd: HWND) {
         let Some(state) = caption_state(hwnd) else {
             return;
         };
-        let settings = state.settings.borrow();
+        let mut settings = state.settings.borrow().clone();
+        settings.font_size =
+            settings.font_size * windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd).max(96) / 96;
 
         let mut rect = RECT::default();
         if GetClientRect(hwnd, &mut rect).is_err() {
@@ -405,6 +605,7 @@ fn run_caption_window_child(
         if width <= 0 || height <= 0 {
             return;
         }
+        settings.font_size = settings.font_size.min(((height - 48).max(20) / 2) as u32);
 
         let hdc = CreateCompatibleDC(None);
         let mut bitmap_info = BITMAPINFO::default();
@@ -432,31 +633,72 @@ fn run_caption_window_child(
 
         let format = DT_CENTER | DT_VCENTER | DT_WORDBREAK;
         let caption_text = state.caption_text.borrow();
-        let label = current_caption_status_label(state);
+        let mut label = current_caption_status_label(state);
+        if let Some(error) = state.control_error.borrow().as_ref() {
+            label = error.clone();
+        } else if state.transcript_saving.get() {
+            label = if label.is_empty() {
+                "● Saving locally".into()
+            } else {
+                format!("{label} · ● Saving locally")
+            };
+        }
         let text = if caption_is_stale(state.caption_updated_at_ms.get()) {
-            "Listening"
+            ""
         } else {
             caption_text.as_str()
         };
 
-        draw_caption_content(hdc, label.as_str(), text, rect, &settings, format);
+        let content_rect = RECT {
+            left: rect.left + 16,
+            right: rect.right - 16,
+            top: rect.top + 8,
+            bottom: rect.bottom - 12,
+        };
+        draw_caption_content(hdc, label.as_str(), text, content_rect, &settings, format);
 
-        if state.placement_file.is_some() {
-            draw_set_button(hdc, rect);
-        }
+        draw_set_button(
+            hdc,
+            rect,
+            if state.placement_file.is_some() {
+                "Set"
+            } else {
+                "···"
+            },
+        );
 
         let (red, green, blue) = hex_to_rgb(&settings.background_color);
         let background_alpha =
             ((settings.background_opacity.clamp(0.0, 1.0) * 255.0).round() as u32).max(1);
-        let background_pixel =
-            (background_alpha << 24) | ((red as u32) << 16) | ((green as u32) << 8) | blue as u32;
+        let background_pixel = (background_alpha << 24)
+            | ((red as u32 * background_alpha / 255) << 16)
+            | ((green as u32 * background_alpha / 255) << 8)
+            | (blue as u32 * background_alpha / 255);
 
-        for pixel in pixels {
+        for pixel in pixels.iter_mut() {
             if (*pixel & 0x00ffffff) == BACKGROUND_MARKER {
                 *pixel = background_pixel;
             } else {
                 *pixel |= 0xff000000;
             }
+        }
+
+        if let Some(path) = &state.render_test_path {
+            let mut bmp = Vec::with_capacity(54 + pixels.len() * 4);
+            bmp.extend_from_slice(b"BM");
+            bmp.extend_from_slice(&(54 + pixels.len() as u32 * 4).to_le_bytes());
+            bmp.extend_from_slice(&[0; 4]);
+            bmp.extend_from_slice(&54u32.to_le_bytes());
+            bmp.extend_from_slice(&40u32.to_le_bytes());
+            bmp.extend_from_slice(&width.to_le_bytes());
+            bmp.extend_from_slice(&(-height).to_le_bytes());
+            bmp.extend_from_slice(&1u16.to_le_bytes());
+            bmp.extend_from_slice(&32u16.to_le_bytes());
+            bmp.extend_from_slice(&[0; 24]);
+            for pixel in pixels.iter() {
+                bmp.extend_from_slice(&pixel.to_le_bytes());
+            }
+            std::fs::write(path, bmp).expect("write controlled overlay render");
         }
 
         let size = SIZE {
@@ -657,7 +899,11 @@ fn run_caption_window_child(
         let y = settings.start_y.unwrap_or(rect.top);
         let _ = SetWindowPos(
             hwnd,
-            Some(HWND_TOPMOST),
+            Some(if settings.always_on_top {
+                HWND_TOPMOST
+            } else {
+                HWND_NOTOPMOST
+            }),
             x,
             y,
             settings.start_width as i32,
@@ -842,7 +1088,7 @@ fn run_caption_window_child(
         state.snap_y_suppressed.set(false);
     }
 
-    unsafe fn draw_set_button(hdc: HDC, client_rect: RECT) {
+    unsafe fn draw_set_button(hdc: HDC, client_rect: RECT, label: &str) {
         let button_rect = set_button_rect(client_rect);
         let brush = CreateSolidBrush(color_ref("#00d1b2"));
         let pen = CreatePen(PS_SOLID, 1, color_ref("#ffffff"));
@@ -877,7 +1123,7 @@ fn run_caption_window_child(
         SetTextColor(hdc, color_ref("#ffffff"));
         SetBkMode(hdc, TRANSPARENT);
 
-        let mut label = "Set".encode_utf16().collect::<Vec<u16>>();
+        let mut label = label.encode_utf16().collect::<Vec<u16>>();
         let mut label_rect = button_rect;
         DrawTextW(
             hdc,
@@ -952,7 +1198,7 @@ fn run_caption_window_child(
         let label_rect = RECT {
             left: rect.left,
             top: rect.top + (height / 10).min(16),
-            right: rect.right,
+            right: rect.right - 36,
             bottom: rect.top + (height / 10).min(16) + label_height,
         };
         let caption_rect = RECT {
@@ -1032,6 +1278,12 @@ fn run_caption_window_child(
         font_size: u32,
         format: DRAW_TEXT_FORMAT,
     ) {
+        // An empty Vec has a dangling pointer; DrawTextW may dereference it even at length zero.
+        if text.trim().is_empty() {
+            return;
+        }
+        let available_height = (rect.bottom - rect.top).max(1) as u32;
+        let font_size = font_size.min((available_height * 3 / 4).max(8));
         let font_family: Vec<u16> = settings.font_family.encode_utf16().chain([0]).collect();
         let font = CreateFontW(
             -(font_size as i32),
@@ -1050,6 +1302,27 @@ fn run_caption_window_child(
             PCWSTR(font_family.as_ptr()),
         );
         let previous_font = SelectObject(hdc, font.into());
+
+        let mut words: Vec<&str> = text.split_whitespace().collect();
+        let mut display = words.join(" ");
+        let mut measured;
+        let max_height = (rect.bottom - rect.top).min(font_size as i32 * 4);
+        loop {
+            measured = rect;
+            let mut buffer: Vec<u16> = display.encode_utf16().collect();
+            DrawTextW(hdc, &mut buffer, &mut measured, format | DT_CALCRECT);
+            if measured.bottom - measured.top <= max_height || words.len() <= 1 {
+                break;
+            }
+            words.remove(0);
+            display = words.join(" ");
+        }
+        let text = display.as_str();
+        let rect = RECT {
+            top: rect.top
+                + ((rect.bottom - rect.top - (measured.bottom - measured.top)) / 2).max(0),
+            ..rect
+        };
 
         if settings.outline_width > 0 {
             SetTextColor(hdc, color_ref(&settings.outline_color));
@@ -1076,6 +1349,23 @@ fn run_caption_window_child(
     }
 
     unsafe {
+        let render_test_path = diagnostic_arg_value("--overlay-render-test");
+        let parent_process = match std::env::var("FEELSAY_PARENT_PID")
+            .ok()
+            .and_then(|value| value.parse::<u32>().ok())
+        {
+            Some(pid) => match windows::Win32::System::Threading::OpenProcess(
+                windows::Win32::System::Threading::PROCESS_SYNCHRONIZE,
+                false,
+                pid,
+            ) {
+                Ok(handle) => Some(handle),
+                Err(_) => return,
+            },
+            None => None,
+        };
+        let hidden_test = render_test_path.is_some();
+        let previous_foreground = windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow();
         let class_name = w!("FeelSayCaptionWindowChild");
         let window_class = WNDCLASSW {
             lpfnWndProc: Some(window_proc),
@@ -1085,10 +1375,36 @@ fn run_caption_window_child(
 
         RegisterClassW(&window_class);
 
-        let x = settings.start_x.unwrap_or(CW_USEDEFAULT);
-        let y = settings.start_y.unwrap_or(CW_USEDEFAULT);
-        let width = settings.start_width as i32;
-        let height = settings.start_height as i32;
+        let mut cursor = POINT::default();
+        let _ = GetCursorPos(&mut cursor);
+        let proposed = RECT {
+            left: settings.start_x.unwrap_or(cursor.x),
+            top: settings.start_y.unwrap_or(cursor.y),
+            right: settings.start_x.unwrap_or(cursor.x) + settings.start_width as i32,
+            bottom: settings.start_y.unwrap_or(cursor.y) + settings.start_height as i32,
+        };
+        let monitor = MonitorFromRect(&proposed, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        let _ = GetMonitorInfoW(monitor, &mut info);
+        let work = info.rcWork;
+        let width = (settings.start_width as i32).min((work.right - work.left).max(280));
+        let height = (settings.start_height as i32).min((work.bottom - work.top).max(110));
+        let x = settings
+            .start_x
+            .unwrap_or(work.left + (work.right - work.left - width) / 2)
+            .clamp(work.left, (work.right - width).max(work.left));
+        let y = settings
+            .start_y
+            .unwrap_or(work.bottom - height - 60)
+            .clamp(work.top, (work.bottom - height).max(work.top));
+        let mut settings = settings;
+        settings.start_x = Some(x);
+        settings.start_y = Some(y);
+        settings.start_width = width as u32;
+        settings.start_height = height as u32;
         let settings_modified = settings_file
             .as_ref()
             .and_then(|path| std::fs::metadata(path).ok())
@@ -1135,6 +1451,11 @@ fn run_caption_window_child(
             .map(|caption| caption.updated_at_ms)
             .unwrap_or(0);
         let state = Box::into_raw(Box::new(CaptionWindowState {
+            parent_process,
+            render_test_path,
+            transcript_saving: Cell::new(false),
+            control_error: RefCell::new(None),
+            control_polled: Cell::new(None),
             settings: RefCell::new(settings),
             placement_file,
             settings_file,
@@ -1153,16 +1474,13 @@ fn run_caption_window_child(
         }));
 
         if CreateWindowExW(
-            WINDOW_EX_STYLE(WS_EX_LAYERED.0 | WS_EX_TOPMOST.0 | WS_EX_APPWINDOW.0),
+            WINDOW_EX_STYLE(
+                WS_EX_LAYERED.0 | WS_EX_TOPMOST.0 | WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0,
+            ),
             class_name,
             w!("FeelSay Caption Window"),
             WINDOW_STYLE(
-                WS_POPUP.0
-                    | WS_VISIBLE.0
-                    | WS_THICKFRAME.0
-                    | WS_SYSMENU.0
-                    | WS_MINIMIZEBOX.0
-                    | WS_MAXIMIZEBOX.0,
+                WS_POPUP.0 | (if hidden_test { 0 } else { WS_VISIBLE.0 }) | WS_THICKFRAME.0,
             ),
             x,
             y,
@@ -1177,19 +1495,22 @@ fn run_caption_window_child(
             apply_window_settings(hwnd);
             render_caption(hwnd);
             write_placement(hwnd, false);
-            let _ = SetWindowPos(
-                hwnd,
-                Some(HWND_TOPMOST),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE,
-            );
+            if hidden_test {
+                assert!(!windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(hwnd).as_bool());
+                assert_eq!(
+                    windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow(),
+                    previous_foreground
+                );
+                let _ = DestroyWindow(hwnd);
+            }
         })
         .is_err()
         {
             drop(Box::from_raw(state));
+            return;
+        }
+
+        if hidden_test {
             return;
         }
 

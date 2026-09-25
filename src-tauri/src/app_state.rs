@@ -16,6 +16,7 @@ use std::{
 };
 
 pub struct AppState {
+    pub overlay_control: Mutex<Option<crate::overlay_control::OverlayControlEndpoint>>,
     audio_meter_service: AudioMeterService,
     caption_settings_service: CaptionSettingsService,
     model_settings_service: ModelSettingsService,
@@ -27,11 +28,14 @@ pub struct AppState {
     placement_process: Mutex<Option<Child>>,
     placement_file: PathBuf,
     caption_file: PathBuf,
+    caption_file_guard: Mutex<Option<fs::File>>,
 }
 
 impl AppState {
     pub fn new(data_dir: PathBuf) -> Self {
+        let _ = fs::remove_file(data_dir.join("caption-runtime.json"));
         Self {
+            overlay_control: Mutex::new(None),
             audio_meter_service: AudioMeterService::default(),
             caption_settings_service: CaptionSettingsService::new(data_dir.clone()),
             model_settings_service: ModelSettingsService::new(data_dir.clone()),
@@ -45,12 +49,27 @@ impl AppState {
                 "feelsay-overlay-placement-{}.json",
                 std::process::id()
             )),
-            caption_file: data_dir.join("caption-runtime.json"),
+            caption_file: std::env::temp_dir()
+                .join(format!("feelsay-caption-{}.json", std::process::id())),
+            caption_file_guard: Mutex::new(None),
         }
     }
 
     pub fn audio_meter(&self) -> &AudioMeterService {
         &self.audio_meter_service
+    }
+
+    pub fn clear_caption_text(&self) {
+        drop(self.caption_file_guard.lock().unwrap().take());
+        let _ = fs::remove_file(&self.caption_file);
+    }
+
+    fn ensure_caption_file(&self) -> io::Result<()> {
+        let mut guard = self.caption_file_guard.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(crate::persistence::open_ephemeral(&self.caption_file)?);
+        }
+        Ok(())
     }
 
     pub fn caption_settings(&self) -> &CaptionSettingsService {
@@ -119,7 +138,9 @@ impl AppState {
             return Ok(None);
         }
 
+        self.ensure_caption_file()?;
         Ok(Some(AsrRuntimeConfig {
+            preferences: self.caption_settings_service.runtime(),
             model_path: model.path.into(),
             executable_path,
             caption_path: self.caption_file.clone(),
@@ -144,6 +165,7 @@ impl AppState {
     }
 
     pub fn open_caption_process(&self) -> Result<(), crate::app_error::AppError> {
+        self.ensure_caption_file()?;
         let mut caption_process = self.caption_process.lock().expect("caption process lock");
 
         if let Some(child) = caption_process.as_mut() {
@@ -152,14 +174,19 @@ impl AppState {
             }
         }
 
-        let settings = self.overlay_settings_service.load()?;
-        self.overlay_settings_service
-            .write_runtime_settings(&settings)?;
+        let settings = self.overlay_settings_service.prepare_overlay()?;
         write_caption_state(&self.caption_file, "", "Listening")?;
         let settings = serde_json::to_string(&settings)
             .map_err(|error| crate::app_error::AppError::Window(error.to_string()))?;
-        let child = Command::new(std::env::current_exe()?)
+        let mut command = Command::new(std::env::current_exe()?);
+        if let Some(endpoint) = self.overlay_control.lock().unwrap().as_ref() {
+            command
+                .env("FEELSAY_OVERLAY_CONTROL", &endpoint.address)
+                .env("FEELSAY_OVERLAY_TOKEN", &endpoint.token);
+        }
+        let child = command
             .arg("--caption-window-child")
+            .env("FEELSAY_PARENT_PID", std::process::id().to_string())
             .env("FEELSAY_OVERLAY_SETTINGS", settings)
             .env(
                 "FEELSAY_OVERLAY_SETTINGS_FILE",
@@ -203,13 +230,7 @@ impl AppState {
     }
 
     pub fn toggle_active_profile_click_through(&self) -> Result<bool, crate::app_error::AppError> {
-        let mut store = self.overlay_settings_service.load_store()?;
-        let mut settings = store.active_settings().clone();
-        settings.click_through = !settings.click_through;
-        let is_click_through = settings.click_through;
-        store.set_active_settings(settings);
-        self.overlay_settings_service.save_store(store)?;
-        Ok(is_click_through)
+        self.overlay_settings_service.toggle_click_through()
     }
 
     pub fn start_overlay_placement(

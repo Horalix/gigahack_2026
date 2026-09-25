@@ -7,6 +7,7 @@ export type OverlayProfileId =
   | "profile5";
 
 export type OverlaySettings = {
+  alwaysOnTop: boolean;
   fontFamily: string;
   fontSize: number;
   fontWeight: FontWeight;

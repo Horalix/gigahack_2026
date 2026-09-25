@@ -145,7 +145,7 @@ export function getSourceModeLabel(mode: SourceMode): string {
     return "Entire System";
   }
 
-  return "Devices";
+  return "Microphone";
 }
 
 export function sourceModeForKind(kind: SourceKind): SourceMode {

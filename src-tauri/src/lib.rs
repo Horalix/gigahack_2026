@@ -1,13 +1,17 @@
 pub mod app_error;
 pub mod app_state;
+#[cfg(target_os = "windows")]
+pub mod application_audio;
 pub mod asr;
 pub mod audio_capture;
 pub mod caption_settings;
 pub mod commands;
 pub mod diarization;
 pub mod model_settings;
+pub mod overlay_control;
 pub mod overlay_settings;
 pub mod performance_settings;
+pub mod persistence;
 pub mod platform;
 pub mod source;
 pub mod transcript;
@@ -26,6 +30,11 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             app.manage(AppState::new(app.path().app_data_dir()?));
+            #[cfg(target_os = "windows")]
+            {
+                *app.state::<AppState>().overlay_control.lock().unwrap() =
+                    Some(overlay_control::start(app.handle().clone())?);
+            }
             setup_tray(app)?;
             setup_global_shortcuts(app)?;
             Ok(())
@@ -41,6 +50,7 @@ pub fn run() {
                     let _ = state.transcripts().finish_session();
                     let _ = state.close_caption_process();
                     let _ = state.stop_overlay_placement();
+                    state.clear_caption_text();
                 }
             }
         })
@@ -56,6 +66,7 @@ pub fn run() {
             commands::save_overlay_settings,
             commands::get_overlay_settings_store,
             commands::save_overlay_settings_store,
+            commands::patch_overlay_settings,
             commands::select_overlay_settings_profile,
             commands::start_overlay_placement,
             commands::get_overlay_placement,
@@ -78,12 +89,16 @@ pub fn run() {
             commands::get_performance_settings,
             commands::save_performance_settings,
             commands::get_transcript_settings,
+            commands::get_transcript_status,
+            commands::read_transcript_session,
+            commands::delete_transcript_session,
             commands::save_transcript_settings,
             commands::start_transcript_session,
             commands::append_transcript_segment,
             commands::finish_transcript_session,
             commands::list_transcript_sessions,
-            commands::export_transcript_session
+            commands::export_transcript_session,
+            commands::open_transcript_exports
         ])
         .run(tauri::generate_context!())
         .expect("error while running Feelsay");
@@ -179,7 +194,10 @@ fn setup_global_shortcuts(app: &mut tauri::App) -> Result<(), Box<dyn std::error
     )?;
 
     for shortcut in shortcuts {
-        app.global_shortcut().register(shortcut)?;
+        // Another application may own a shortcut; the main controls must still work.
+        if let Err(error) = app.global_shortcut().register(shortcut) {
+            eprintln!("Shortcut unavailable: {error}");
+        }
     }
 
     Ok(())
@@ -211,6 +229,7 @@ fn quit_app(app: &tauri::AppHandle) {
         let _ = state.transcripts().finish_session();
         let _ = state.close_caption_process();
         let _ = state.stop_overlay_placement();
+        state.clear_caption_text();
     }
 
     app.exit(0);

@@ -37,6 +37,7 @@
   let selectedSystemSourceId = $state("");
   let selectedDeviceId = $state("");
   let pickerState = $state<PickerState>({ status: "loading" });
+  let dialog: HTMLDialogElement;
 
   let sources = $derived(
     pickerState.status === "ready" ? pickerState.sources : [],
@@ -50,10 +51,7 @@
     sources.filter((source) => source.kind === "system_audio"),
   );
   let deviceSources = $derived(
-    sources.filter(
-      (source) =>
-        source.kind === "microphone" || source.kind === "output_device",
-    ),
+    sources.filter((source) => source.kind === "microphone"),
   );
   let previewBySourceId = $derived(
     new Map(
@@ -73,6 +71,7 @@
   );
 
   onMount(() => {
+    dialog.showModal();
     hydrateDraft(selection);
     void loadPickerData();
   });
@@ -112,14 +111,30 @@
         : "";
   }
 
-  function handleBackdropClick(event: MouseEvent) {
-    if (event.target === event.currentTarget) {
-      onCancel();
-    }
-  }
-
   function selectTab(tab: SourceMode) {
     activeTab = tab;
+  }
+
+  function cancel() {
+    dialog.close();
+    onCancel();
+  }
+
+  function navigateTabs(event: KeyboardEvent) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const current = tabs.indexOf(activeTab);
+    const next =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? tabs.length - 1
+          : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) %
+            tabs.length;
+    activeTab = tabs[next];
+    (event.currentTarget as HTMLElement).parentElement
+      ?.querySelectorAll<HTMLButtonElement>("button")
+      [next]?.focus();
   }
 
   function toggleApplication(applicationId: string) {
@@ -131,8 +146,8 @@
     selectedSystemSourceId = "";
     selectedDeviceId = "";
     selectedApplications = selectedApplications.includes(applicationId)
-      ? selectedApplications.filter((id) => id !== applicationId)
-      : [...selectedApplications, applicationId];
+      ? []
+      : [applicationId];
   }
 
   function selectSystemAudio(sourceId: string) {
@@ -154,6 +169,7 @@
       return;
     }
 
+    dialog.close();
     onApply(draftSelection);
   }
 
@@ -226,163 +242,162 @@
   }
 </script>
 
-<div class="modal-backdrop" role="presentation" onclick={handleBackdropClick}>
-  <div
-    class="source-picker"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="source-picker-title"
-    tabindex="-1"
-  >
-    <header class="picker-header">
-      <h2 id="source-picker-title">Select source</h2>
+<dialog
+  bind:this={dialog}
+  oncancel={(event) => {
+    event.preventDefault();
+    cancel();
+  }}
+  class="source-picker"
+  aria-modal="true"
+  aria-labelledby="source-picker-title"
+  tabindex="-1"
+>
+  <header class="picker-header">
+    <h2 id="source-picker-title">Select source</h2>
+    <button
+      class="icon-button"
+      type="button"
+      aria-label="Close source picker"
+      onclick={cancel}
+    >
+      x
+    </button>
+  </header>
+
+  <div class="tabs" role="tablist" aria-label="Source categories">
+    {#each tabs as tab}
       <button
-        class="icon-button"
+        class:active={activeTab === tab}
         type="button"
-        aria-label="Close source picker"
-        onclick={onCancel}
+        role="tab"
+        aria-selected={activeTab === tab}
+        tabindex={activeTab === tab ? 0 : -1}
+        onkeydown={navigateTabs}
+        onclick={() => selectTab(tab)}
       >
-        x
+        {getSourceModeLabel(tab)}
       </button>
-    </header>
+    {/each}
+  </div>
 
-    <div class="tabs" role="tablist" aria-label="Source categories">
-      {#each tabs as tab}
-        <button
-          class:active={activeTab === tab}
-          type="button"
-          role="tab"
-          aria-selected={activeTab === tab}
-          onclick={() => selectTab(tab)}
-        >
-          {getSourceModeLabel(tab)}
-        </button>
-      {/each}
-    </div>
-
-    <div class="picker-body">
-      {#if pickerState.status === "loading"}
-        <p class="picker-message">Loading sources</p>
-      {:else if pickerState.status === "error"}
-        <p class="picker-message error">{pickerState.message}</p>
-      {:else if activeTab === "applications"}
-        {#if applicationSources.length > 0}
-          <div class="application-grid" aria-label="Available applications">
-            {#each applicationSources as source}
-              <button
-                class:selected={selectedApplications.includes(source.id)}
-                class:unsupported={!source.isAvailable}
-                class="application-tile"
-                type="button"
-                disabled={!source.isAvailable}
-                aria-pressed={selectedApplications.includes(source.id)}
-                onclick={() => toggleApplication(source.id)}
-              >
-                <SourcePreviewThumbnail
-                  fallbackInitials={sourceInitials(source.displayName)}
-                  preview={previewFor(source)}
-                />
-                <span class="tile-footer">
-                  <span class="tile-title">{sourcePrimaryLabel(source)}</span>
-                  <span class="tile-subtitle"
-                    >{sourceSecondaryLabel(source)}</span
-                  >
-                  <span class="selection-mark" aria-hidden="true">
-                    {sourceActionLabel(source)}
-                  </span>
+  <div class="picker-body">
+    {#if pickerState.status === "loading"}
+      <p class="picker-message">Loading sources</p>
+    {:else if pickerState.status === "error"}
+      <p class="picker-message error">{pickerState.message}</p>
+    {:else if activeTab === "applications"}
+      {#if applicationSources.length > 0}
+        <div class="application-grid" aria-label="Available applications">
+          {#each applicationSources as source}
+            <button
+              class:selected={selectedApplications.includes(source.id)}
+              class:unsupported={!source.isAvailable}
+              class="application-tile"
+              type="button"
+              disabled={!source.isAvailable}
+              aria-pressed={selectedApplications.includes(source.id)}
+              onclick={() => toggleApplication(source.id)}
+            >
+              <SourcePreviewThumbnail
+                fallbackInitials={sourceInitials(source.displayName)}
+                preview={previewFor(source)}
+              />
+              <span class="tile-footer">
+                <span class="tile-title">{sourcePrimaryLabel(source)}</span>
+                <span class="tile-subtitle">{sourceSecondaryLabel(source)}</span
+                >
+                <span class="selection-mark" aria-hidden="true">
+                  {sourceActionLabel(source)}
                 </span>
-              </button>
-            {/each}
-          </div>
-        {:else}
-          <p class="picker-message">No applications found</p>
-        {/if}
-      {:else if activeTab === "system"}
-        {#if systemSources.length > 0}
-          {#each systemSources as source}
-            <button
-              class:selected={selectedSystemSourceId === source.id}
-              class="wide-option"
-              type="button"
-              aria-pressed={selectedSystemSourceId === source.id}
-              onclick={() => selectSystemAudio(source.id)}
-            >
-              <span>
-                <strong>{source.displayName}</strong>
-                <small>Captions everything playing on this computer.</small>
-              </span>
-              <span class="selection-mark" aria-hidden="true">
-                {selectedSystemSourceId === source.id ? "Selected" : "Select"}
-              </span>
-            </button>
-          {/each}
-        {:else}
-          <p class="picker-message">System audio is not available yet</p>
-        {/if}
-      {:else if deviceSources.length > 0}
-        <div class="device-list" aria-label="Available audio devices">
-          {#each deviceSources as source}
-            <button
-              class:selected={selectedDeviceId === source.id}
-              class="wide-option"
-              type="button"
-              aria-pressed={selectedDeviceId === source.id}
-              onclick={() => selectDevice(source.id)}
-            >
-              <span>
-                <strong>{source.displayName}</strong>
-                <small>
-                  {deviceKindLabel(source)}
-                  {source.metadata?.isDefault ? " - Default" : ""}
-                </small>
-              </span>
-              <span class="selection-mark" aria-hidden="true">
-                {selectedDeviceId === source.id ? "Selected" : "Select"}
               </span>
             </button>
           {/each}
         </div>
       {:else}
-        <p class="picker-message">No devices found</p>
+        <p class="picker-message">No applications found</p>
       {/if}
-    </div>
-
-    <footer class="picker-footer">
-      <span class="draft-label">
-        {draftSelection?.displayLabel ?? "Choose a source to continue"}
-      </span>
-      <div class="footer-actions">
-        <button class="secondary-action" type="button" onclick={onCancel}
-          >Cancel</button
-        >
-        <button
-          class="primary-action"
-          type="button"
-          disabled={!draftSelection}
-          onclick={applySelection}
-        >
-          Use Source
-        </button>
+    {:else if activeTab === "system"}
+      {#if systemSources.length > 0}
+        {#each systemSources as source}
+          <button
+            class:selected={selectedSystemSourceId === source.id}
+            class="wide-option"
+            type="button"
+            aria-pressed={selectedSystemSourceId === source.id}
+            onclick={() => selectSystemAudio(source.id)}
+          >
+            <span>
+              <strong>{source.displayName}</strong>
+              <small>Captions everything playing on this computer.</small>
+            </span>
+            <span class="selection-mark" aria-hidden="true">
+              {selectedSystemSourceId === source.id ? "Selected" : "Select"}
+            </span>
+          </button>
+        {/each}
+      {:else}
+        <p class="picker-message">System audio is not available yet</p>
+      {/if}
+    {:else if deviceSources.length > 0}
+      <div class="device-list" aria-label="Available audio devices">
+        {#each deviceSources as source}
+          <button
+            class:selected={selectedDeviceId === source.id}
+            class="wide-option"
+            type="button"
+            aria-pressed={selectedDeviceId === source.id}
+            onclick={() => selectDevice(source.id)}
+          >
+            <span>
+              <strong>{source.displayName}</strong>
+              <small>
+                {deviceKindLabel(source)}
+                {source.metadata?.isDefault ? " - Default" : ""}
+              </small>
+            </span>
+            <span class="selection-mark" aria-hidden="true">
+              {selectedDeviceId === source.id ? "Selected" : "Select"}
+            </span>
+          </button>
+        {/each}
       </div>
-    </footer>
+    {:else}
+      <p class="picker-message">No devices found</p>
+    {/if}
   </div>
-</div>
+
+  <footer class="picker-footer">
+    <span class="draft-label">
+      {draftSelection?.displayLabel ?? "Choose a source to continue"}
+    </span>
+    <div class="footer-actions">
+      <button class="secondary-action" type="button" onclick={cancel}
+        >Cancel</button
+      >
+      <button
+        class="primary-action"
+        type="button"
+        disabled={!draftSelection}
+        onclick={applySelection}
+      >
+        Use Source
+      </button>
+    </div>
+  </footer>
+</dialog>
 
 <style>
-  .modal-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 10;
-    display: grid;
-    place-items: center;
-    padding: 24px;
+  .source-picker::backdrop {
     background: oklch(0% 0 0 / 0.58);
   }
 
   .source-picker {
+    padding: 0;
+    margin: auto;
     display: grid;
     grid-template-rows: auto auto minmax(0, 1fr) auto;
-    width: min(860px, 100%);
+    width: min(860px, calc(100% - 32px));
     height: fit-content;
     max-height: min(720px, calc(100vh - 48px));
     overflow: hidden;

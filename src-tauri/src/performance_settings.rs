@@ -46,7 +46,7 @@ impl PerformanceSettingsService {
 
         let content = serde_json::to_string_pretty(&settings)
             .map_err(|error| AppError::Io(error.to_string()))?;
-        fs::write(&self.path, content)?;
+        crate::persistence::write_bytes(&self.path, content.as_bytes())?;
 
         Ok(settings)
     }
@@ -235,11 +235,11 @@ fn clamp_f32(value: f32, min: f32, max: f32) -> f32 {
 }
 
 fn default_min_transcribe_seconds() -> f32 {
-    3.0
+    1.5
 }
 
 fn default_max_transcribe_seconds() -> f32 {
-    8.0
+    6.0
 }
 
 fn default_transcribe_interval_ms() -> u64 {
@@ -251,11 +251,11 @@ fn default_asr_queue_capacity() -> usize {
 }
 
 fn default_vad_speech_level_threshold() -> f32 {
-    0.035
+    0.006
 }
 
 fn default_vad_silence_level_threshold() -> f32 {
-    0.018
+    0.0035
 }
 
 fn default_vad_speech_frames() -> u8 {
@@ -271,11 +271,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn balanced_preserves_existing_runtime_defaults() {
+    fn balanced_uses_short_live_chunks() {
         let runtime = PerformanceSettings::default().normalized().runtime();
 
-        assert_eq!(runtime.min_transcribe_samples, 16_000 * 3);
-        assert_eq!(runtime.max_transcribe_samples, 16_000 * 8);
+        assert_eq!(runtime.min_transcribe_samples, 24_000);
+        assert_eq!(runtime.max_transcribe_samples, 16_000 * 6);
         assert_eq!(runtime.transcribe_interval_ms, 1400);
         assert_eq!(runtime.asr_queue_capacity, 4);
     }

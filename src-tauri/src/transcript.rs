@@ -4,28 +4,288 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::PathBuf,
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{self, SyncSender},
+        Arc, Mutex,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
 const SETTINGS_FILE_NAME: &str = "transcript-settings.json";
 const DATABASE_FILE_NAME: &str = "transcripts.db";
+const STORAGE_LIMIT: u64 = 64 * 1024 * 1024;
+const SAVE_ERROR: &str = "Transcript saving stopped. Free disk space or delete saved transcripts in Settings, then enable saving again.";
+
+type StoreTask = Box<dyn FnOnce(&mut TranscriptStoreState) + Send>;
+
+#[derive(Clone)]
+pub struct TranscriptService {
+    sender: SyncSender<StoreTask>,
+    // Odd generations permit saving. Every consent/session boundary invalidates queued audio.
+    generation: Arc<AtomicU64>,
+    error: Arc<Mutex<Option<String>>>,
+    queue_failed: Arc<AtomicBool>,
+    #[cfg(test)]
+    database_path: PathBuf,
+}
+
+impl std::fmt::Debug for TranscriptService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TranscriptService").finish_non_exhaustive()
+    }
+}
+
+impl TranscriptService {
+    pub fn new(data_dir: PathBuf) -> Self {
+        let generation = Arc::new(AtomicU64::new(0));
+        let error = Arc::new(Mutex::new(None));
+        let queue_failed = Arc::new(AtomicBool::new(false));
+        let worker_queue_failed = queue_failed.clone();
+        let mut store = TranscriptStoreState::new(data_dir.clone());
+        store.generation = generation.clone();
+        store.error = error.clone();
+        match store.load_settings() {
+            Ok(settings) => generation.store(u64::from(settings.saving_enabled), Ordering::SeqCst),
+            Err(_) => {
+                *error.lock().unwrap() =
+                    Some("Transcript settings could not be read. Saving is off.".into())
+            }
+        }
+        let (sender, receiver) = mpsc::sync_channel::<StoreTask>(32);
+        std::thread::Builder::new()
+            .name("feelsay-transcripts".into())
+            .spawn(move || {
+                while let Ok(task) = receiver.recv() {
+                    if worker_queue_failed.swap(false, Ordering::SeqCst) {
+                        store.fail_saving();
+                    }
+                    task(&mut store);
+                }
+                let _ = store.finish_session();
+            })
+            .expect("start transcript worker");
+        Self {
+            sender,
+            generation,
+            error,
+            queue_failed,
+            #[cfg(test)]
+            database_path: data_dir.join(DATABASE_FILE_NAME),
+        }
+    }
+
+    fn request<T: Send + 'static>(
+        &self,
+        task: impl FnOnce(&mut TranscriptStoreState) -> Result<T, AppError> + Send + 'static,
+    ) -> Result<T, AppError> {
+        let (sender, receiver) = mpsc::channel();
+        self.sender
+            .send(Box::new(move |store| {
+                let _ = sender.send(task(store));
+            }))
+            .map_err(|_| AppError::Io(SAVE_ERROR.into()))?;
+        receiver
+            .recv()
+            .map_err(|_| AppError::Io(SAVE_ERROR.into()))?
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    pub fn load_settings(&self) -> Result<TranscriptSettings, AppError> {
+        Ok(TranscriptSettings {
+            saving_enabled: self.generation() % 2 == 1,
+        })
+    }
+
+    pub fn status(&self) -> TranscriptStatus {
+        TranscriptStatus {
+            saving_enabled: self.generation() % 2 == 1,
+            error: self.error.lock().unwrap().clone(),
+        }
+    }
+
+    pub fn save_settings(
+        &self,
+        settings: TranscriptSettings,
+    ) -> Result<TranscriptSettings, AppError> {
+        // Close the consent gate immediately. Only the newest settings request may reopen it.
+        let previous = self
+            .generation
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |old| {
+                Some((old + 2) & !1)
+            })
+            .unwrap();
+        let revision = (previous + 2) & !1;
+        self.request(move |store| {
+            if store.generation.load(Ordering::SeqCst) != revision {
+                return Ok(TranscriptSettings {
+                    saving_enabled: store.generation.load(Ordering::SeqCst) % 2 == 1,
+                });
+            }
+            store.save_settings(settings.clone())?;
+            let _ = store.generation.compare_exchange(
+                revision,
+                revision | u64::from(settings.saving_enabled),
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+            *store.error.lock().unwrap() = None;
+            Ok(settings)
+        })
+    }
+
+    pub fn start_session(&self, source_summary: String) -> Result<Option<i64>, AppError> {
+        self.request(move |store| {
+            if store.finish_session().is_err() {
+                store.fail_saving();
+            }
+            store.generation.fetch_add(2, Ordering::SeqCst);
+            store.source_summary = Some(source_summary.clone());
+            store.session_started_at_ms = now_ms();
+            match store.start_session(source_summary) {
+                Ok(session) => Ok(session),
+                Err(_) => {
+                    store.fail_saving();
+                    Ok(None)
+                }
+            }
+        })
+    }
+
+    pub fn finish_session(&self) -> Result<(), AppError> {
+        self.request(|store| {
+            store.source_summary = None;
+            store.finish_session()
+        })
+    }
+
+    pub fn append_segment(&self, segment: TranscriptSegment) -> Result<(), AppError> {
+        let generation = self.generation();
+        self.request(move |store| store.append_if_current(segment, generation))
+    }
+
+    pub fn enqueue_segment(&self, segment: TranscriptSegment, generation: u64) {
+        if generation & 1 == 0 || generation != self.generation() {
+            return;
+        }
+        if self
+            .sender
+            .try_send(Box::new(move |store| {
+                if store.append_if_current(segment, generation).is_err() {
+                    store.fail_saving();
+                }
+            }))
+            .is_err()
+        {
+            self.queue_failed.store(true, Ordering::SeqCst);
+            self.generation.fetch_and(!1, Ordering::SeqCst);
+            *self.error.lock().unwrap() = Some(SAVE_ERROR.into());
+        }
+    }
+
+    pub fn runtime_config(&self) -> Option<TranscriptRuntimeConfig> {
+        Some(TranscriptRuntimeConfig {
+            service: self.clone(),
+        })
+    }
+
+    pub fn exports_directory(&self) -> Result<PathBuf, AppError> {
+        self.request(|store| {
+            fs::create_dir_all(&store.exports_dir)?;
+            Ok(store.exports_dir.clone())
+        })
+    }
+
+    pub fn list_sessions(&self, limit: u32) -> Result<Vec<TranscriptSessionSummary>, AppError> {
+        self.request(move |store| store.list_sessions(limit))
+    }
+
+    pub fn read_session(&self, session_id: i64) -> Result<String, AppError> {
+        self.request(move |store| {
+            let connection = store.open_connection()?;
+            render_export(
+                &load_session(&connection, session_id)?,
+                &load_segments(&connection, session_id)?,
+                TranscriptExportFormat::Txt,
+            )
+        })
+    }
+
+    pub fn export_session(
+        &self,
+        session_id: i64,
+        format: TranscriptExportFormat,
+    ) -> Result<String, AppError> {
+        self.request(move |store| store.export_session(session_id, format))
+    }
+
+    pub fn delete_session(&self, session_id: i64) -> Result<(), AppError> {
+        self.request(move |store| {
+            let connection = store.open_connection()?;
+            let session = load_session(&connection, session_id)?;
+            for format in [
+                TranscriptExportFormat::Txt,
+                TranscriptExportFormat::Srt,
+                TranscriptExportFormat::Vtt,
+                TranscriptExportFormat::Json,
+            ] {
+                let path = store.exports_dir.join(format!(
+                    "feelsay-transcript-{}-{}.{}",
+                    session.id,
+                    session.started_at_ms,
+                    format.extension()
+                ));
+                if path.exists() {
+                    fs::remove_file(path)?;
+                }
+            }
+            connection.execute(
+                "DELETE FROM transcript_sessions WHERE id = ?1",
+                params![session_id],
+            )?;
+            let mut active = store.active_session_id.lock().unwrap();
+            if *active == Some(session_id) {
+                *active = None;
+                store.generation.fetch_add(2, Ordering::SeqCst);
+            }
+            Ok(())
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptStatus {
+    pub saving_enabled: bool,
+    pub error: Option<String>,
+}
 
 #[derive(Debug)]
-pub struct TranscriptService {
+struct TranscriptStoreState {
     settings_path: PathBuf,
     database_path: PathBuf,
     exports_dir: PathBuf,
     active_session_id: Mutex<Option<i64>>,
+    source_summary: Option<String>,
+    session_started_at_ms: u64,
+    generation: Arc<AtomicU64>,
+    error: Arc<Mutex<Option<String>>>,
 }
 
-impl TranscriptService {
+impl TranscriptStoreState {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             settings_path: data_dir.join(SETTINGS_FILE_NAME),
             database_path: data_dir.join(DATABASE_FILE_NAME),
             exports_dir: data_dir.join("transcript-exports"),
             active_session_id: Mutex::new(None),
+            source_summary: None,
+            session_started_at_ms: 0,
+            generation: Arc::new(AtomicU64::new(0)),
+            error: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -60,13 +320,13 @@ impl TranscriptService {
 
         let content = serde_json::to_string_pretty(&settings)
             .map_err(|error| AppError::Io(error.to_string()))?;
-        fs::write(&self.settings_path, content)?;
+        crate::persistence::write_bytes(&self.settings_path, content.as_bytes())?;
 
         Ok(settings)
     }
 
     pub fn start_session(&self, source_summary: String) -> Result<Option<i64>, AppError> {
-        if !self.load_settings()?.saving_enabled {
+        if self.generation.load(Ordering::SeqCst) & 1 == 0 {
             *self
                 .active_session_id
                 .lock()
@@ -75,9 +335,16 @@ impl TranscriptService {
         }
 
         let connection = self.open_connection()?;
+        let count: u32 =
+            connection.query_row("SELECT COUNT(*) FROM transcript_sessions", [], |row| {
+                row.get(0)
+            })?;
+        if count >= 100 {
+            return Err(AppError::Io(SAVE_ERROR.into()));
+        }
         connection.execute(
             "INSERT INTO transcript_sessions (started_at_ms, source_summary) VALUES (?1, ?2)",
-            params![now_ms(), clean_text(&source_summary)],
+            params![self.session_started_at_ms, clean_text(&source_summary)],
         )?;
         let session_id = connection.last_insert_rowid();
 
@@ -89,9 +356,23 @@ impl TranscriptService {
         Ok(Some(session_id))
     }
 
-    pub fn append_segment(&self, segment: TranscriptSegment) -> Result<(), AppError> {
-        if !self.load_settings()?.saving_enabled {
+    fn append_if_current(
+        &self,
+        mut segment: TranscriptSegment,
+        generation: u64,
+    ) -> Result<(), AppError> {
+        if generation & 1 == 0
+            || generation != self.generation.load(Ordering::SeqCst)
+            || !segment.is_final
+        {
             return Ok(());
+        }
+
+        if self.active_session_id.lock().unwrap().is_none() {
+            let Some(source) = &self.source_summary else {
+                return Ok(());
+            };
+            self.start_session(source.clone())?;
         }
 
         let session_id = match *self
@@ -104,6 +385,10 @@ impl TranscriptService {
         };
 
         let connection = self.open_connection()?;
+        if segment.start_ms >= self.session_started_at_ms && self.session_started_at_ms > 0 {
+            segment.start_ms = segment.start_ms.saturating_sub(self.session_started_at_ms);
+            segment.end_ms = segment.end_ms.saturating_sub(self.session_started_at_ms);
+        }
         insert_segment(&connection, session_id, segment)
     }
 
@@ -127,16 +412,10 @@ impl TranscriptService {
         Ok(())
     }
 
-    pub fn runtime_config(&self) -> Option<TranscriptRuntimeConfig> {
-        let session_id = *self
-            .active_session_id
-            .lock()
-            .expect("transcript session lock");
-
-        session_id.map(|session_id| TranscriptRuntimeConfig {
-            database_path: self.database_path.clone(),
-            session_id,
-        })
+    fn fail_saving(&self) {
+        self.generation.fetch_and(!1, Ordering::SeqCst);
+        *self.error.lock().unwrap() = Some(SAVE_ERROR.into());
+        let _ = self.save_settings(TranscriptSettings::default());
     }
 
     pub fn list_sessions(&self, limit: u32) -> Result<Vec<TranscriptSessionSummary>, AppError> {
@@ -195,6 +474,16 @@ impl TranscriptService {
             format.extension()
         );
         let path = self.exports_dir.join(file_name);
+        let used = fs::read_dir(&self.exports_dir)?
+            .try_fold(0u64, |total, entry| -> Result<u64, std::io::Error> {
+                Ok(total + entry?.metadata()?.len())
+            })?;
+        let replaced = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+        if used.saturating_sub(replaced) + content.len() as u64 > STORAGE_LIMIT {
+            return Err(AppError::Io(
+                "Transcript exports are full. Delete saved transcripts to free space.".into(),
+            ));
+        }
         fs::write(&path, content)?;
 
         Ok(path.to_string_lossy().to_string())
@@ -207,21 +496,23 @@ impl TranscriptService {
 
         let connection = Connection::open(&self.database_path)?;
         initialize_schema(&connection)?;
+        let page_size: u64 = connection.query_row("PRAGMA page_size", [], |row| row.get(0))?;
+        connection.pragma_update(None, "max_page_count", STORAGE_LIMIT / page_size)?;
         Ok(connection)
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct TranscriptRuntimeConfig {
-    database_path: PathBuf,
-    session_id: i64,
+    service: TranscriptService,
 }
 
 impl TranscriptRuntimeConfig {
-    pub fn append_segment(&self, segment: TranscriptSegment) -> Result<(), AppError> {
-        let connection = Connection::open(&self.database_path)?;
-        initialize_schema(&connection)?;
-        insert_segment(&connection, self.session_id, segment)
+    pub fn generation(&self) -> u64 {
+        self.service.generation()
+    }
+    pub fn append_segment(&self, segment: TranscriptSegment, generation: u64) {
+        self.service.enqueue_segment(segment, generation);
     }
 }
 
@@ -291,6 +582,9 @@ fn initialize_schema(connection: &Connection) -> Result<(), AppError> {
     connection.execute_batch(
         "
         PRAGMA foreign_keys = ON;
+        PRAGMA secure_delete = ON;
+        PRAGMA journal_mode = DELETE;
+        PRAGMA temp_store = MEMORY;
 
         CREATE TABLE IF NOT EXISTS transcript_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -326,6 +620,14 @@ fn insert_segment(
     session_id: i64,
     segment: TranscriptSegment,
 ) -> Result<(), AppError> {
+    if !segment.is_final {
+        return Ok(());
+    }
+    let text_size =
+        segment.original_text.len() + segment.translated_text.as_ref().map_or(0, String::len);
+    if text_size > 64 * 1024 {
+        return Err(AppError::Io(SAVE_ERROR.into()));
+    }
     connection.execute(
         "INSERT INTO transcript_segments (
             session_id,
@@ -449,7 +751,18 @@ fn render_txt(session: &TranscriptSessionSummary, segments: &[TranscriptSegment]
     if segments.is_empty() {
         lines.push("No transcript segments saved.".to_string());
     } else {
-        lines.extend(segments.iter().map(segment_export_text));
+        lines.push(format!(
+            "Session start (Unix milliseconds): {}",
+            session.started_at_ms
+        ));
+        lines.extend(segments.iter().map(|segment| {
+            format!(
+                "[{} – {}] {}",
+                format_vtt_time(segment.start_ms),
+                format_vtt_time(segment.end_ms),
+                segment_export_text(segment)
+            )
+        }));
     }
 
     lines.join("\n")
@@ -518,7 +831,13 @@ struct TranscriptExport<'a> {
 }
 
 fn segment_export_text(segment: &TranscriptSegment) -> String {
-    let text = clean_text(&segment.original_text);
+    let mut text = clean_text(&segment.original_text);
+    if let Some(translation) = &segment.translated_text {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&clean_text(translation));
+    }
     let labels = segment_export_labels(segment);
 
     if labels.is_empty() {
@@ -761,5 +1080,185 @@ mod tests {
         let content = fs::read_to_string(path).unwrap();
 
         assert!(content.contains("[Default Microphone | Speaker 1 (low confidence)] hello world"));
+    }
+
+    fn segment(text: &str) -> TranscriptSegment {
+        TranscriptSegment {
+            start_ms: 100,
+            end_ms: 900,
+            original_text: text.into(),
+            translated_text: Some("translated words".into()),
+            source_label: Some("Test source".into()),
+            speaker_label: None,
+            speaker_confidence: None,
+            is_final: true,
+        }
+    }
+
+    #[test]
+    fn running_session_can_enable_disable_and_reenable_without_backfill() {
+        let service = test_service("live-consent");
+        service.start_session("Test source".into()).unwrap();
+        let runtime = service.runtime_config().unwrap();
+        let disabled = runtime.generation();
+        service
+            .save_settings(TranscriptSettings {
+                saving_enabled: true,
+            })
+            .unwrap();
+        let first = runtime.generation();
+        runtime.append_segment(segment("before consent"), disabled);
+        runtime.append_segment(segment("saved first"), first);
+        assert_eq!(service.list_sessions(100).unwrap()[0].segment_count, 1);
+        service
+            .save_settings(TranscriptSettings::default())
+            .unwrap();
+        runtime.append_segment(segment("late inference"), first);
+        service
+            .save_settings(TranscriptSettings {
+                saving_enabled: true,
+            })
+            .unwrap();
+        runtime.append_segment(segment("old generation"), first);
+        runtime.append_segment(segment("saved second"), runtime.generation());
+        service.finish_session().unwrap();
+        let sessions = service.list_sessions(100).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].segment_count, 2);
+        let text = service.read_session(sessions[0].id).unwrap();
+        assert!(text.contains("saved first") && text.contains("saved second"));
+        assert!(
+            !text.contains("before consent")
+                && !text.contains("late inference")
+                && !text.contains("old generation")
+        );
+    }
+
+    #[test]
+    fn interim_is_rejected_and_all_exports_include_translation() {
+        let service = test_service("final-only");
+        service
+            .save_settings(TranscriptSettings {
+                saving_enabled: true,
+            })
+            .unwrap();
+        let id = service
+            .start_session("Test source".into())
+            .unwrap()
+            .unwrap();
+        let mut interim = segment("unstable");
+        interim.is_final = false;
+        service.append_segment(interim).unwrap();
+        service.append_segment(segment("complete words")).unwrap();
+        for format in [
+            TranscriptExportFormat::Txt,
+            TranscriptExportFormat::Srt,
+            TranscriptExportFormat::Vtt,
+            TranscriptExportFormat::Json,
+        ] {
+            let path = service.export_session(id, format).unwrap();
+            let text = fs::read_to_string(path).unwrap();
+            assert!(text.contains("translated words"));
+            assert!(!text.contains("unstable"));
+        }
+        assert_eq!(service.list_sessions(100).unwrap()[0].segment_count, 1);
+    }
+
+    #[test]
+    fn delete_clears_database_exports_and_invalidates_inflight_segments() {
+        let service = test_service("delete-privacy");
+        service
+            .save_settings(TranscriptSettings {
+                saving_enabled: true,
+            })
+            .unwrap();
+        let id = service
+            .start_session("Test source".into())
+            .unwrap()
+            .unwrap();
+        let runtime = service.runtime_config().unwrap();
+        let old = runtime.generation();
+        service
+            .append_segment(segment("private_unique_phrase_394720"))
+            .unwrap();
+        let export = service
+            .export_session(id, TranscriptExportFormat::Txt)
+            .unwrap();
+        service.delete_session(id).unwrap();
+        runtime.append_segment(segment("resurrected deleted text"), old);
+        assert!(service.list_sessions(100).unwrap().is_empty());
+        assert!(!Path::new(&export).exists());
+        let bytes = fs::read(&service.database_path).unwrap();
+        assert!(!bytes
+            .windows(b"private_unique_phrase_394720".len())
+            .any(|bytes| bytes == b"private_unique_phrase_394720"));
+        runtime.append_segment(segment("future speech"), runtime.generation());
+        let sessions = service.list_sessions(100).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_ne!(sessions[0].id, id);
+    }
+
+    #[test]
+    fn storage_failure_stops_saving_without_stopping_captions() {
+        let service = test_service("bounded-storage");
+        service
+            .save_settings(TranscriptSettings {
+                saving_enabled: true,
+            })
+            .unwrap();
+        service.start_session("Test source".into()).unwrap();
+        service.enqueue_segment(segment(&"x".repeat(65 * 1024)), service.generation());
+        service.list_sessions(100).unwrap(); // Writer barrier.
+        assert!(!service.status().saving_enabled);
+        assert!(service.status().error.is_some());
+        assert_eq!(count_rows(&service.database_path, "transcript_segments"), 0);
+    }
+
+    #[test]
+    fn unavailable_storage_does_not_prevent_caption_session_start() {
+        let service = test_service("unavailable-storage");
+        service
+            .save_settings(TranscriptSettings {
+                saving_enabled: true,
+            })
+            .unwrap();
+        fs::create_dir_all(&service.database_path).unwrap();
+        assert_eq!(service.start_session("Test source".into()).unwrap(), None);
+        assert!(!service.status().saving_enabled);
+        assert!(service.status().error.is_some());
+    }
+
+    #[test]
+    fn full_writer_queue_stops_immediately_and_persists_disabled_state() {
+        let service = test_service("writer-overload");
+        service
+            .save_settings(TranscriptSettings {
+                saving_enabled: true,
+            })
+            .unwrap();
+        service.start_session("Test source".into()).unwrap();
+        let (entered, waiting) = mpsc::channel();
+        let (release, blocked) = mpsc::channel();
+        service
+            .sender
+            .send(Box::new(move |_| {
+                entered.send(()).unwrap();
+                blocked.recv().unwrap();
+            }))
+            .unwrap();
+        waiting.recv().unwrap();
+        for _ in 0..32 {
+            service.sender.try_send(Box::new(|_| {})).unwrap();
+        }
+        service.enqueue_segment(segment("must never reach disk"), service.generation());
+        assert!(!service.status().saving_enabled);
+        release.send(()).unwrap();
+        service.list_sessions(100).unwrap();
+        let settings: TranscriptSettings = serde_json::from_str(
+            &fs::read_to_string(service.database_path.with_file_name(SETTINGS_FILE_NAME)).unwrap(),
+        )
+        .unwrap();
+        assert!(!settings.saving_enabled);
+        assert_eq!(count_rows(&service.database_path, "transcript_segments"), 0);
     }
 }

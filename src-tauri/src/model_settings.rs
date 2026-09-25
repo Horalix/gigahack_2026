@@ -2,22 +2,29 @@ use crate::app_error::AppError;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    io::{Read, Write},
     path::{Path, PathBuf},
-    process::Command,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
 };
 
 const FILE_NAME: &str = "model-settings.json";
 const DEFAULT_MODEL_FILE: &str = "ggml-base.bin";
 const DEFAULT_MODEL_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin";
-const WHISPER_CPP_VERSION: &str = "v1.8.6";
-const WHISPER_CPP_ZIP_URL: &str =
-    "https://github.com/ggml-org/whisper.cpp/releases/download/v1.8.6/whisper-bin-x64.zip";
+const DEFAULT_MODEL_SHA256: &str =
+    "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe";
+const DEFAULT_MODEL_BYTES: u64 = 147_951_465;
 
 #[derive(Debug, Clone)]
 pub struct ModelSettingsService {
     path: PathBuf,
     models_dir: PathBuf,
+    install_lock: Arc<Mutex<()>>,
+    download_progress: Arc<AtomicU64>,
 }
 
 impl ModelSettingsService {
@@ -25,6 +32,8 @@ impl ModelSettingsService {
         Self {
             path: data_dir.join(FILE_NAME),
             models_dir: data_dir.join("models"),
+            install_lock: Arc::new(Mutex::new(())),
+            download_progress: Arc::new(AtomicU64::new(u64::MAX)),
         }
     }
 
@@ -54,40 +63,36 @@ impl ModelSettingsService {
 
         let content = serde_json::to_string_pretty(&store)
             .map_err(|error| AppError::Io(error.to_string()))?;
-        fs::write(&self.path, content)?;
+        crate::persistence::write_bytes(&self.path, content.as_bytes())?;
 
         Ok(store)
     }
 
     pub fn status(&self) -> Result<ModelStatus, AppError> {
         let store = self.load()?;
-        Ok(ModelStatus::from_store(store))
+        let mut status = ModelStatus::from_store(store);
+        let progress = self.download_progress.load(Ordering::Relaxed);
+        status.download_progress = (progress != u64::MAX).then_some(progress.min(100) as u8);
+        Ok(status)
     }
 
     pub fn install_default_assets(&self) -> Result<ModelSettingsStore, AppError> {
+        let _guard = self
+            .install_lock
+            .try_lock()
+            .map_err(|_| AppError::Io("Speech model setup is already running.".into()))?;
+        struct ResetProgress<'a>(&'a AtomicU64);
+        impl Drop for ResetProgress<'_> {
+            fn drop(&mut self) {
+                self.0.store(u64::MAX, Ordering::Relaxed);
+            }
+        }
+        self.download_progress.store(0, Ordering::Relaxed);
+        let _progress = ResetProgress(&self.download_progress);
         fs::create_dir_all(&self.models_dir)?;
         let model_path = self.models_dir.join(DEFAULT_MODEL_FILE);
-        let executable_path = self
-            .models_dir
-            .parent()
-            .unwrap_or(&self.models_dir)
-            .join("tools")
-            .join(format!("whisper.cpp-{WHISPER_CPP_VERSION}"))
-            .join("Release")
-            .join("whisper-cli.exe");
-
-        if !model_path.exists() {
-            download_file(DEFAULT_MODEL_URL, &model_path)?;
-        }
-
-        if !executable_path.exists() {
-            install_whisper_cpp(&executable_path)?;
-        }
-
-        if !model_path.exists() || !executable_path.exists() {
-            return Err(AppError::Io(
-                "default ASR assets were not installed correctly".to_string(),
-            ));
+        if !valid_default_model(&model_path) {
+            download_file(DEFAULT_MODEL_URL, &model_path, &self.download_progress)?;
         }
 
         let mut store = self.load()?;
@@ -107,7 +112,8 @@ impl ModelSettingsService {
         model.name = "Whisper Base Multilingual".to_string();
         model.language = Some("Multilingual".to_string());
         model.path = model_path.to_string_lossy().to_string();
-        model.executable_path = Some(executable_path.to_string_lossy().to_string());
+        model.executable_path = None;
+        model.checksum_sha256 = Some(DEFAULT_MODEL_SHA256.into());
         model.is_installed = true;
         model.file_size_bytes = file_size(&model.path);
         store.active_model_id = model.id.clone();
@@ -211,6 +217,7 @@ pub struct ModelMetadata {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelStatus {
+    pub download_progress: Option<u8>,
     pub active_model: Option<ModelMetadata>,
     pub models_dir: String,
     pub is_ready: bool,
@@ -235,6 +242,7 @@ impl ModelStatus {
 
         Self {
             active_model,
+            download_progress: None,
             models_dir: store.models_dir,
             is_ready,
             message,
@@ -284,61 +292,79 @@ pub fn model_supports_translation(model: &ModelMetadata) -> bool {
         && !joined.contains("-en")
 }
 
-fn download_file(url: &str, path: &Path) -> Result<(), AppError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+fn valid_default_model(path: &Path) -> bool {
+    use sha2::{Digest, Sha256};
+    let Ok(mut file) = fs::File::open(path) else {
+        return false;
+    };
+    if file
+        .metadata()
+        .map_or(true, |meta| meta.len() != DEFAULT_MODEL_BYTES)
+    {
+        return false;
     }
-
-    let status = Command::new("powershell")
-        .arg("-NoProfile")
-        .arg("-ExecutionPolicy")
-        .arg("Bypass")
-        .arg("-Command")
-        .arg(
-            "& { param($Url, $OutFile) Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing }",
-        )
-        .arg(url)
-        .arg(path)
-        .status()?;
-
-    if !status.success() {
-        return Err(AppError::Io(format!("failed to download {url}")));
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 65_536];
+    loop {
+        match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => hash.update(&buffer[..count]),
+            Err(_) => return false,
+        }
     }
-
-    Ok(())
+    format!("{:x}", hash.finalize()) == DEFAULT_MODEL_SHA256
 }
 
-fn install_whisper_cpp(executable_path: &Path) -> Result<(), AppError> {
-    let install_dir = executable_path
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| AppError::Io("invalid whisper.cpp install path".to_string()))?;
-    fs::create_dir_all(install_dir)?;
-
-    let zip_path = std::env::temp_dir().join(format!("whisper-bin-x64-{WHISPER_CPP_VERSION}.zip"));
-    download_file(WHISPER_CPP_ZIP_URL, &zip_path)?;
-
-    let status = Command::new("powershell")
-        .arg("-NoProfile")
-        .arg("-ExecutionPolicy")
-        .arg("Bypass")
-        .arg("-Command")
-        .arg(
-            "& { param($ZipPath, $Destination) Expand-Archive -Path $ZipPath -DestinationPath $Destination -Force }",
-        )
-        .arg(&zip_path)
-        .arg(install_dir)
-        .status()?;
-
-    let _ = fs::remove_file(zip_path);
-
-    if !status.success() {
-        return Err(AppError::Io(
-            "failed to extract whisper.cpp executable".to_string(),
-        ));
+fn download_file(url: &str, path: &Path, progress: &AtomicU64) -> Result<(), AppError> {
+    let temporary = path.with_extension("download");
+    let result = (|| -> Result<(), AppError> {
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(20))
+            .timeout(Duration::from_secs(600))
+            .https_only(true)
+            .build()
+            .map_err(|error| AppError::Io(error.to_string()))?;
+        let mut response = client
+            .get(url)
+            .send()
+            .and_then(|response| response.error_for_status())
+            .map_err(|_| {
+                AppError::Io(
+                    "Speech model download failed. Check your connection and try again.".into(),
+                )
+            })?;
+        let mut output = fs::File::create(&temporary)?;
+        let mut copied = 0;
+        let mut buffer = [0u8; 65_536];
+        loop {
+            let count = response.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            copied += count as u64;
+            if copied > DEFAULT_MODEL_BYTES {
+                return Err(AppError::Io(
+                    "Speech model download had an unexpected size. Please try again.".into(),
+                ));
+            }
+            output.write_all(&buffer[..count])?;
+            progress.store(copied * 100 / DEFAULT_MODEL_BYTES, Ordering::Relaxed);
+        }
+        output.flush()?;
+        output.sync_all()?;
+        drop(output);
+        if copied != DEFAULT_MODEL_BYTES || !valid_default_model(&temporary) {
+            return Err(AppError::Io(
+                "Speech model download was incomplete. Please try again.".into(),
+            ));
+        }
+        fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+    if temporary.exists() {
+        let _ = fs::remove_file(&temporary);
     }
-
-    Ok(())
+    result
 }
 
 fn model_runtime_ready(model: &ModelMetadata) -> bool {
@@ -368,6 +394,53 @@ fn missing_runtime(model: &ModelMetadata) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "downloads the official model; requires FEELSAY_RUN_DOWNLOAD_TEST=1"]
+    fn default_model_setup_repairs_and_reuses_verified_download() {
+        assert_eq!(
+            std::env::var("FEELSAY_RUN_DOWNLOAD_TEST").as_deref(),
+            Ok("1")
+        );
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "feelsay-model-download-test-{}-{suffix}",
+            std::process::id()
+        ));
+        assert!(!root.exists());
+        let service = ModelSettingsService::new(root.clone());
+        fs::create_dir_all(&service.models_dir).unwrap();
+        let model = service.models_dir.join(DEFAULT_MODEL_FILE);
+        fs::write(&model, b"incomplete model fixture").unwrap();
+        println!(
+            "Downloading and verifying the official speech model into an isolated test directory."
+        );
+        service.install_default_assets().unwrap();
+        assert!(valid_default_model(&model));
+        assert!(service.status().unwrap().is_ready);
+        assert!(service.status().unwrap().download_progress.is_none());
+        let modified = fs::metadata(&model).unwrap().modified().unwrap();
+        service.install_default_assets().unwrap();
+        assert_eq!(
+            fs::metadata(&model).unwrap().modified().unwrap(),
+            modified,
+            "verified cache must be reused"
+        );
+        assert!(
+            ModelSettingsService::new(root.clone())
+                .status()
+                .unwrap()
+                .is_ready
+        );
+        assert!(!model.with_extension("download").exists());
+        fs::remove_file(model).unwrap();
+        fs::remove_file(&service.path).unwrap();
+        fs::remove_dir(&service.models_dir).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
 
     fn model(path: &str, language: Option<&str>) -> ModelMetadata {
         ModelMetadata {

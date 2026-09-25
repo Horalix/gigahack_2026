@@ -102,6 +102,16 @@ export function selectOverlaySettingsProfile(
   });
 }
 
+export function patchOverlaySettings(
+  profileId: OverlayProfileId,
+  patch: Partial<OverlaySettings>,
+): Promise<OverlaySettingsStore> {
+  return invoke<OverlaySettingsStore>("patch_overlay_settings", {
+    profileId,
+    patch,
+  });
+}
+
 export function startOverlayPlacement(
   settings: OverlaySettings,
 ): Promise<OverlayPlacement> {
@@ -200,6 +210,20 @@ export function getTranscriptSettings(): Promise<TranscriptSettings> {
   return invoke<TranscriptSettings>("get_transcript_settings");
 }
 
+export function getTranscriptStatus(): Promise<
+  TranscriptSettings & { error: string | null }
+> {
+  return invoke("get_transcript_status");
+}
+
+export function readTranscriptSession(sessionId: number): Promise<string> {
+  return invoke("read_transcript_session", { sessionId });
+}
+
+export function deleteTranscriptSession(sessionId: number): Promise<void> {
+  return invoke("delete_transcript_session", { sessionId });
+}
+
 export function saveTranscriptSettings(
   settings: TranscriptSettings,
 ): Promise<TranscriptSettings> {
@@ -223,7 +247,7 @@ export function finishTranscriptSession(): Promise<void> {
 }
 
 export function listTranscriptSessions(
-  limit = 20,
+  limit = 100,
 ): Promise<TranscriptSessionSummary[]> {
   return invoke<TranscriptSessionSummary[]>("list_transcript_sessions", {
     limit,
@@ -235,6 +259,10 @@ export function exportTranscriptSession(
   format: TranscriptExportFormat,
 ): Promise<string> {
   return invoke<string>("export_transcript_session", { sessionId, format });
+}
+
+export function openTranscriptExports(): Promise<void> {
+  return invoke<void>("open_transcript_exports");
 }
 
 export function commandErrorMessage(error: unknown): string {

@@ -9,6 +9,17 @@ use crate::{
     },
 };
 
+fn application_capture_supported() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        crate::application_audio::is_supported()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
 #[cfg(target_os = "windows")]
 use std::{collections::HashSet, mem::size_of, path::Path};
 
@@ -77,7 +88,8 @@ impl PlatformCapabilityProvider for WindowsPlatformProvider {
             microphone_capture_available: true,
             live_preview_available: false,
             supports_system_audio: true,
-            supports_application_audio: false,
+            supports_application_audio: cfg!(target_os = "windows")
+                && application_capture_supported(),
             supports_microphone: true,
             supports_live_preview: false,
             supports_loopback_capture: true,
@@ -425,7 +437,7 @@ fn window_source(window: WindowSource) -> AudioSource {
         id: format!("window:{:x}:{}", window.hwnd.0 as usize, window.process_id),
         display_name: window.title.clone(),
         kind: SourceKind::Window,
-        is_available: false,
+        is_available: application_capture_supported(),
         platform: "windows".to_string(),
         metadata: Some(SourceMetadata {
             app_name: window.process_path.as_deref().and_then(process_stem),
@@ -571,16 +583,30 @@ fn is_useless_window_class(class_name: &str) -> bool {
 
 #[cfg(target_os = "windows")]
 fn is_feelsay_process(title: &str, process_path: Option<&str>) -> bool {
-    let title = title.to_lowercase();
-    if title.contains("feelsay") {
-        return true;
-    }
-
     process_path
         .and_then(|path| Path::new(path).file_stem())
         .and_then(|name| name.to_str())
-        .map(|name| name.to_lowercase().contains("feelsay"))
-        .unwrap_or(false)
+        .map(|name| name.eq_ignore_ascii_case("feelsay"))
+        .unwrap_or_else(|| {
+            title.eq_ignore_ascii_case("FeelSay")
+                || title.eq_ignore_ascii_case("FeelSay Caption Window")
+        })
+}
+
+#[cfg(all(test, target_os = "windows"))]
+#[test]
+fn source_filter_does_not_hide_other_apps_discussing_feelsay() {
+    assert!(!is_feelsay_process(
+        "FeelSay Controlled Audio Fixture",
+        Some("C:/tests/FixturePlayer.exe")
+    ));
+    assert!(!is_feelsay_process(
+        "FeelSay documentation",
+        Some("C:/browser/msedge.exe")
+    ));
+    assert!(!is_feelsay_process("FeelSay documentation", None));
+    assert!(is_feelsay_process("Captions", Some("C:/app/FeelSay.exe")));
+    assert!(is_feelsay_process("FeelSay Caption Window", None));
 }
 
 #[cfg(target_os = "windows")]

@@ -1,62 +1,15 @@
-# Caption Overlay
+# Caption overlay
 
-The Caption Overlay is the floating subtitle window that appears when the user starts captions.
+The overlay is a Win32/GDI layered child process, separate from the Tauri settings window. It has no webview, taskbar button, normal title bar, or activation on mouse interaction. Topmost behavior is optional.
 
-It is intentionally simple: it displays caption text only. It should not contain dashboard controls, source selection, settings menus, or other normal in-overlay UI.
+Drag the caption area to move it. Resize using edges and corners. A small corner control opens native options for text size, text/background colors, opacity, and local transcript saving. The full Settings dialog remains in the main window. Click-through is optional and disables mouse interaction until turned off in Settings or with Ctrl+Shift+X.
 
-## Current Implementation
+Appearance settings are written atomically and read by the overlay. An authenticated loopback-only control channel carries settings and saving status; it never carries audio or transcript content. Geometry persists after a move or resize. Startup positions are clamped to the nearest monitor work area; font sizes scale with monitor DPI.
 
-- Windows-only child process launched by the main Tauri app.
-- Rendered with Win32/GDI, not a Svelte webview.
-- Frameless, always-on-top, resizable, and draggable.
-- Uses a transparent/translucent layered window.
-- Uses a tiny nonzero alpha hit area when opacity is visually `0%` so the window can still be dragged.
-- Can be set to click-through mode so clicks pass to apps behind it.
-- Reads live settings from a runtime JSON file while running.
+Recognition writes bounded recent text, keeping original/translation boundaries separate. The overlay wraps within its dimensions, drops older words if necessary, and clears stale speech after 4.5 seconds. Finalized speech is stored independently of display truncation. Saving status and storage errors are visible in the overlay.
 
-This child-process model replaced the earlier Tauri overlay window because lifecycle, native close, and drag behavior were unreliable for the frameless transparent overlay.
+Start owns one overlay process. Stop and normal exit close it. The child also watches the parent process and closes if the parent exits unexpectedly.
 
-## Lifecycle Rules
+`--overlay-render-test <bmp-path>` exercises the native renderer with a window that never has `WS_VISIBLE`. It asserts that the window remains invisible and the foreground handle stays unchanged, then writes a bitmap and exits. `FEELSAY_CAPTION_TEXT_FILE` and `FEELSAY_OVERLAY_SETTINGS` supply controlled fixtures. Do not launch ordinary visible overlay tests in an active user's desktop session.
 
-- `Start` opens one caption child process.
-- `Stop` closes the caption child process.
-- Closing the Main Window closes the caption child process.
-- Starting again after close creates a fresh overlay.
-- There must never be duplicate overlay instances.
-- There must never be orphan/zombie overlay windows.
-
-## Settings
-
-Overlay appearance and placement are owned by Rust settings and exposed in the Settings modal.
-
-Supported settings:
-
-- Font family
-- Font size
-- Font weight
-- Text color
-- Outline color
-- Outline width
-- Background color
-- Background opacity
-- Starting width
-- Starting height
-- Starting X/Y position
-- Click-through mode
-- Five named profiles
-
-Settings autosave and live-update the running overlay.
-
-## Visual Placement
-
-The visual placement helper is a temporary child-process window used only from Settings.
-
-It lets the user drag and resize a preview overlay, then accept that geometry into the current profile. It is intentionally separate from the real caption overlay and remains interactive even if the real overlay profile has click-through enabled.
-
-## Important Constraints
-
-- Keep the normal Caption Overlay text-only.
-- Keep child-process lifecycle simple.
-- Do not add Svelte/Tauri webview controls inside the overlay unless there is a strong reason.
-- Keep placement/configuration in the Settings flow.
-- Keep ASR, translation, and transcript logic outside the overlay window.
+Hidden rendering verifies the renderer and no-activation path. Live dragging, resize cursors, popup interaction, mixed-monitor DPI transitions, fullscreen behavior, and parent-crash lifecycle still need the explicitly controlled manual checks in `installer-smoke-test.md`.

@@ -69,17 +69,28 @@ pub fn start_audio_meter(
     source_label: Option<String>,
 ) -> CommandResult<()> {
     let asr_config = state.asr_runtime_config_for_source(source_label)?;
+    if asr_config.is_none() {
+        return Err(AppError::Asr("missing model; download the speech model first".into()).into());
+    }
 
     state
         .audio_meter()
-        .start_mock_meter(app, source_ids, asr_config)?;
+        .start_capture(app, source_ids, asr_config)?;
     Ok(())
 }
 
 #[tauri::command]
-pub fn stop_audio_meter(state: State<'_, AppState>) -> CommandResult<()> {
-    state.audio_meter().stop()?;
-    Ok(())
+pub async fn stop_audio_meter(app: AppHandle) -> CommandResult<()> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state.audio_meter().stop()?;
+        state.clear_caption_text();
+        Ok::<_, AppError>(())
+    })
+    .await
+    .map_err(|_| AppError::Audio("Audio capture cleanup was interrupted".into()))?
+    .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -140,6 +151,15 @@ pub fn select_overlay_settings_profile(
 }
 
 #[tauri::command]
+pub fn patch_overlay_settings(
+    state: State<'_, AppState>,
+    profile_id: OverlayProfileId,
+    patch: serde_json::Value,
+) -> CommandResult<OverlaySettingsStore> {
+    Ok(state.overlay_settings().patch(Some(profile_id), patch)?)
+}
+
+#[tauri::command]
 pub fn start_overlay_placement(
     state: State<'_, AppState>,
     settings: OverlaySettings,
@@ -196,8 +216,14 @@ pub fn get_model_status(state: State<'_, AppState>) -> CommandResult<ModelStatus
 }
 
 #[tauri::command]
-pub fn install_default_asr_assets(state: State<'_, AppState>) -> CommandResult<ModelSettingsStore> {
-    Ok(state.model_settings().install_default_assets()?)
+pub async fn install_default_asr_assets(
+    state: State<'_, AppState>,
+) -> CommandResult<ModelSettingsStore> {
+    let service = state.model_settings().clone();
+    tauri::async_runtime::spawn_blocking(move || service.install_default_assets())
+        .await
+        .map_err(|_| AppError::Io("Speech model setup was interrupted.".into()))?
+        .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -290,6 +316,24 @@ pub fn get_transcript_settings(state: State<'_, AppState>) -> CommandResult<Tran
 }
 
 #[tauri::command]
+pub fn get_transcript_status(state: State<'_, AppState>) -> crate::transcript::TranscriptStatus {
+    state.transcripts().status()
+}
+
+#[tauri::command]
+pub fn read_transcript_session(
+    state: State<'_, AppState>,
+    session_id: i64,
+) -> CommandResult<String> {
+    Ok(state.transcripts().read_session(session_id)?)
+}
+
+#[tauri::command]
+pub fn delete_transcript_session(state: State<'_, AppState>, session_id: i64) -> CommandResult<()> {
+    Ok(state.transcripts().delete_session(session_id)?)
+}
+
+#[tauri::command]
 pub fn save_transcript_settings(
     state: State<'_, AppState>,
     settings: TranscriptSettings,
@@ -335,4 +379,24 @@ pub fn export_transcript_session(
     format: TranscriptExportFormat,
 ) -> CommandResult<String> {
     Ok(state.transcripts().export_session(session_id, format)?)
+}
+
+#[tauri::command]
+pub fn open_transcript_exports(state: State<'_, AppState>) -> CommandResult<()> {
+    let directory = state.transcripts().exports_directory()?;
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg(directory)
+            .spawn()
+            .map_err(AppError::from)?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = directory;
+        return Err(
+            AppError::Io("Open the exports directory using your file manager.".into()).into(),
+        );
+    }
+    Ok(())
 }

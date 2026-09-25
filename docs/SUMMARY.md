@@ -1,5 +1,7 @@
 # FeelSay App Summary
 
+This document records the original product direction. For implemented behavior and verification, use the [README](../README.md) and [project status](PROJECT_STATUS.md).
+
 ## One-Line Concept
 
 FeelSay is a lightweight desktop app for local-first live captions and translation, shown in a movable subtitle overlay that can sit on top of any app, call, game, browser, or media player.
@@ -42,7 +44,7 @@ The user selects an input source and output language. The overlay can show trans
 
 ### Local Transcript Saving
 
-Later, if transcript saving is enabled, sessions can be stored locally with timestamps and exported as TXT, SRT, VTT, JSON, or similar formats.
+If transcript saving is enabled, finalized sessions are stored locally with timestamps and exported as TXT, SRT, VTT, JSON, or similar formats.
 
 ### Accessibility Utility
 

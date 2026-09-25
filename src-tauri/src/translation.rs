@@ -51,7 +51,7 @@ impl TranslationSettingsService {
 
         let content = serde_json::to_string_pretty(&settings)
             .map_err(|error| AppError::Io(error.to_string()))?;
-        fs::write(&self.path, content)?;
+        crate::persistence::write_bytes(&self.path, content.as_bytes())?;
 
         Ok(settings)
     }
@@ -198,6 +198,10 @@ impl TranslationRuntimeConfig {
 
     pub fn target_language(&self) -> TranslationLanguage {
         self.target_language
+    }
+
+    pub fn source_language(&self) -> TranslationLanguage {
+        self.source_language
     }
 
     pub fn translate_text(&self, text: &str) -> Result<String, AppError> {

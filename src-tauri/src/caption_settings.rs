@@ -6,20 +6,34 @@ use crate::{
     },
 };
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 const FILE_NAME: &str = "caption-settings.json";
 
 #[derive(Debug, Clone)]
 pub struct CaptionSettingsService {
     path: PathBuf,
+    runtime: Arc<Mutex<CaptionSettings>>,
 }
 
 impl CaptionSettingsService {
     pub fn new(data_dir: PathBuf) -> Self {
-        Self {
+        let service = Self {
             path: data_dir.join(FILE_NAME),
+            runtime: Arc::new(Mutex::new(CaptionSettings::default())),
+        };
+        if let Ok(settings) = service.load() {
+            *service.runtime.lock().unwrap() = settings;
         }
+        service
+    }
+
+    pub fn runtime(&self) -> Arc<Mutex<CaptionSettings>> {
+        self.runtime.clone()
     }
 
     pub fn load(&self) -> Result<CaptionSettings, AppError> {
@@ -52,7 +66,8 @@ impl CaptionSettingsService {
 
         let content = serde_json::to_string_pretty(&settings)
             .map_err(|error| AppError::Io(error.to_string()))?;
-        fs::write(&self.path, content)?;
+        crate::persistence::write_bytes(&self.path, content.as_bytes())?;
+        *self.runtime.lock().unwrap() = settings.clone();
 
         Ok(settings)
     }
@@ -73,9 +88,8 @@ pub struct CaptionSettings {
 
 impl CaptionSettings {
     fn normalized(mut self) -> Self {
-        if self.translation_target_language == TranslationLanguage::Auto {
-            self.translation_target_language = TranslationLanguage::English;
-        }
+        self.translation_target_language = TranslationLanguage::English;
+        self.speaker_labels_enabled = false;
         self
     }
 }

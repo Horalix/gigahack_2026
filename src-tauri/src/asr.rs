@@ -14,7 +14,11 @@ use std::{
     fs,
     path::PathBuf,
     process::{Child, Command},
-    sync::mpsc::{sync_channel, SyncSender, TrySendError},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{sync_channel, SyncSender, TrySendError},
+        Arc,
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -24,7 +28,6 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 const CAPTION_MAX_LINES: usize = 2;
-const CAPTION_MAX_CHARS_PER_LINE: usize = 48;
 
 pub trait AsrEngine {
     fn engine_id(&self) -> &'static str;
@@ -38,6 +41,7 @@ pub trait AsrEngine {
 
 #[derive(Debug, Clone)]
 pub struct AsrRuntimeConfig {
+    pub preferences: Arc<std::sync::Mutex<crate::caption_settings::CaptionSettings>>,
     pub model_path: PathBuf,
     pub executable_path: Option<PathBuf>,
     pub caption_path: PathBuf,
@@ -91,6 +95,12 @@ pub struct WhisperAsrEngine {
 
 impl WhisperAsrEngine {
     pub fn load(config: &AsrRuntimeConfig) -> Result<Self, AppError> {
+        #[cfg(feature = "local-asr")]
+        {
+            static LOGGING: std::sync::Once = std::sync::Once::new();
+            LOGGING.call_once(whisper_rs::install_logging_hooks);
+        }
+        #[cfg(not(feature = "local-asr"))]
         if let Some(executable_path) = &config.executable_path {
             return Ok(Self {
                 external: Some(ExternalWhisperCliEngine::new(
@@ -123,9 +133,10 @@ impl WhisperAsrEngine {
             let model_path = model_path
                 .to_str()
                 .ok_or_else(|| AppError::Asr("model path is not valid UTF-8".to_string()))?;
-            let context =
-                WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
-                    .map_err(|error| AppError::Asr(error.to_string()))?;
+            let mut parameters = WhisperContextParameters::default();
+            parameters.use_gpu(false);
+            let context = WhisperContext::new_with_params(model_path, parameters)
+                .map_err(|error| AppError::Asr(error.to_string()))?;
 
             Ok(Self {
                 external: None,
@@ -142,18 +153,9 @@ pub fn run_asr_diagnostic(config: AsrRuntimeConfig) -> Result<AsrDiagnosticResul
     ));
     synthesize_diagnostic_wav(&speech_path)?;
 
-    let Some(executable_path) = config.executable_path else {
-        let _ = fs::remove_file(speech_path);
-        return Err(AppError::Asr(
-            "ASR diagnostic requires a whisper.cpp executable path".to_string(),
-        ));
-    };
-
-    let engine = ExternalWhisperCliEngine::new(executable_path, config.model_path)?;
-    let text = engine.transcribe_wav(&speech_path, config.caption_mode != CaptionMode::Captions)?;
+    let result = run_asr_file_diagnostic(config, speech_path.clone());
     let _ = fs::remove_file(speech_path);
-
-    Ok(AsrDiagnosticResult { text })
+    result
 }
 
 pub fn run_asr_file_diagnostic(
@@ -272,16 +274,6 @@ impl AsrEngine for WhisperAsrEngine {
 
         #[cfg(feature = "local-asr")]
         {
-            if mode != CaptionMode::Captions
-                && translation
-                    .map(|config| config.target_language().is_english())
-                    .unwrap_or(true)
-            {
-                return Err(AppError::Asr(
-                    "translation mode currently requires a whisper.cpp executable path".to_string(),
-                ));
-            }
-
             let context = self
                 .context
                 .as_ref()
@@ -290,45 +282,53 @@ impl AsrEngine for WhisperAsrEngine {
                 return Ok(AsrOutput::captions(String::new()));
             }
 
-            let mut state = context
-                .create_state()
-                .map_err(|error| AppError::Asr(error.to_string()))?;
-            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-            params.set_language(Some("en"));
-            params.set_print_special(false);
-            params.set_print_progress(false);
-            params.set_print_realtime(false);
-            params.set_print_timestamps(false);
-
-            state
-                .full(params, samples)
-                .map_err(|error| AppError::Asr(error.to_string()))?;
-
-            let text = state
-                .as_iter()
-                .map(|segment| segment.to_string())
-                .collect::<Vec<_>>()
-                .join(" ")
-                .trim()
-                .to_string();
-
-            if mode == CaptionMode::Captions {
-                return Ok(AsrOutput::captions(text));
-            }
-
-            let translation = translation.ok_or_else(|| {
-                AppError::Translation("translation runtime is not configured".to_string())
-            })?;
-            let translated_text = translation.translate_text(&text)?;
-
+            let recognize = |translate: bool| -> Result<String, AppError> {
+                let mut state = context
+                    .create_state()
+                    .map_err(|error| AppError::Asr(error.to_string()))?;
+                let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+                // Short live chunks must not trigger up to six increasingly random decode retries.
+                params.set_temperature_inc(0.0);
+                params.set_language(Some(
+                    translation
+                        .and_then(|config| config.source_language().code())
+                        .unwrap_or("auto"),
+                ));
+                params.set_translate(translate);
+                params.set_no_context(true);
+                // 50 encoder positions per second; avoid encoding 30 seconds of padding for live chunks.
+                params.set_audio_ctx(
+                    ((samples.len() / 320).div_ceil(64) * 64).clamp(256, 1500) as i32
+                );
+                params.set_n_threads(
+                    std::thread::available_parallelism()
+                        .map_or(2, |count| (count.get() / 2).clamp(1, 4))
+                        as i32,
+                );
+                params.set_print_special(false);
+                params.set_print_progress(false);
+                params.set_print_realtime(false);
+                params.set_print_timestamps(false);
+                params.set_suppress_blank(true);
+                params.set_suppress_nst(true);
+                state
+                    .full(params, samples)
+                    .map_err(|error| AppError::Asr(error.to_string()))?;
+                Ok(state
+                    .as_iter()
+                    .map(|segment| segment.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .trim()
+                    .to_string())
+            };
             match mode {
-                CaptionMode::Captions => Ok(AsrOutput::captions(text)),
-                CaptionMode::Translate => {
-                    Ok(AsrOutput::translation_with_original(text, translated_text))
-                }
-                CaptionMode::OriginalAndTranslation => {
-                    Ok(AsrOutput::original_and_translation(text, translated_text))
-                }
+                CaptionMode::Captions => Ok(AsrOutput::captions(recognize(false)?)),
+                CaptionMode::Translate => Ok(AsrOutput::translation(recognize(true)?)),
+                CaptionMode::OriginalAndTranslation => Ok(AsrOutput::original_and_translation(
+                    recognize(false)?,
+                    recognize(true)?,
+                )),
             }
         }
     }
@@ -340,6 +340,7 @@ struct ExternalWhisperCliEngine {
 }
 
 impl ExternalWhisperCliEngine {
+    #[cfg(not(feature = "local-asr"))]
     fn new(executable_path: PathBuf, model_path: PathBuf) -> Result<Self, AppError> {
         if !executable_path.exists() {
             return Err(AppError::Asr(format!(
@@ -471,6 +472,8 @@ impl ExternalWhisperCliEngine {
 }
 
 pub struct AsrCaptureRuntime {
+    error: Option<AppError>,
+    preferences: Arc<std::sync::Mutex<crate::caption_settings::CaptionSettings>>,
     engine: WhisperAsrEngine,
     caption_path: PathBuf,
     transcript: Option<TranscriptRuntimeConfig>,
@@ -482,50 +485,101 @@ pub struct AsrCaptureRuntime {
     samples: Vec<f32>,
     last_transcription: Option<Instant>,
     segment_start_ms: Option<u64>,
-    last_transcript_text: String,
+    segment_end_ms: u64,
+    segment_generation: u64,
+    pending_output: Option<(AsrOutput, Option<SpeakerLabel>)>,
+    transcribed_samples: usize,
 }
 
 pub struct AsrCaptureWorker {
+    error: Arc<std::sync::Mutex<Option<AppError>>>,
     sender: Option<SyncSender<AsrWorkItem>>,
     handle: Option<JoinHandle<()>>,
+    transcript: Option<TranscriptRuntimeConfig>,
+    overloaded: Arc<AtomicBool>,
 }
 
 impl AsrCaptureWorker {
     pub fn start(config: AsrRuntimeConfig) -> Result<Self, AppError> {
-        let queue_capacity = config.performance.asr_queue_capacity;
+        // WASAPI packets are often 10 ms: the previous 4-packet queue lost audio during inference.
+        let queue_capacity = 500;
+        let overloaded = Arc::new(AtomicBool::new(false));
+        let worker_overloaded = overloaded.clone();
+        let error = Arc::new(std::sync::Mutex::new(None));
+        let worker_error = error.clone();
+        let transcript = config.transcript.clone();
         let mut runtime = AsrCaptureRuntime::new(config)?;
         let (sender, receiver) = sync_channel::<AsrWorkItem>(queue_capacity);
         let handle = thread::Builder::new()
             .name("feelsay-asr-worker".to_string())
             .spawn(move || {
-                while let Ok(item) = receiver.recv() {
-                    runtime.push_frame(&item.frame, item.speech_detected);
+                while let Ok(mut item) = receiver.recv() {
+                    if worker_overloaded.swap(false, Ordering::SeqCst) {
+                        while let Ok(latest) = receiver.try_recv() {
+                            item = latest;
+                        }
+                        runtime.samples.clear();
+                        runtime.pending_output = None;
+                        runtime.segment_start_ms = None;
+                        runtime.transcribed_samples = 0;
+                        let _ = write_caption_state(
+                            &runtime.caption_path,
+                            "",
+                            "Catching up — some speech was missed",
+                        );
+                    }
+                    runtime.push_frame_with_generation(
+                        &item.frame,
+                        item.speech_detected,
+                        item.generation,
+                    );
+                    if let Some(error) = runtime.error.take() {
+                        *worker_error.lock().unwrap() = Some(error);
+                        return;
+                    }
                 }
+                runtime.finalize_segment();
             })
             .map_err(|error| AppError::Asr(error.to_string()))?;
 
         Ok(Self {
             sender: Some(sender),
+            error,
             handle: Some(handle),
+            transcript,
+            overloaded,
         })
     }
 
     pub fn push_frame(&self, frame: &PcmAudioFrame, speech_detected: bool) {
-        if !speech_detected {
-            return;
-        }
-
         let Some(sender) = &self.sender else {
             return;
         };
 
         match sender.try_send(AsrWorkItem {
-            frame: frame.clone(),
+            frame: PcmAudioFrame {
+                source_ids: Vec::new(),
+                samples: resample_to_16k_mono(frame),
+                sample_rate: TARGET_SAMPLE_RATE,
+                channels: 1,
+                timestamp_ms: frame.timestamp_ms,
+            },
             speech_detected,
+            generation: self
+                .transcript
+                .as_ref()
+                .map_or(0, TranscriptRuntimeConfig::generation),
         }) {
-            Ok(()) | Err(TrySendError::Full(_)) => {}
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                self.overloaded.store(true, Ordering::SeqCst);
+            }
             Err(TrySendError::Disconnected(_)) => {}
         }
+    }
+
+    pub fn take_error(&self) -> Option<AppError> {
+        self.error.lock().unwrap().take()
     }
 }
 
@@ -541,6 +595,7 @@ impl Drop for AsrCaptureWorker {
 struct AsrWorkItem {
     frame: PcmAudioFrame,
     speech_detected: bool,
+    generation: u64,
 }
 
 impl AsrCaptureRuntime {
@@ -557,6 +612,8 @@ impl AsrCaptureRuntime {
 
         Ok(Self {
             engine: WhisperAsrEngine::load(&config)?,
+            error: None,
+            preferences: config.preferences,
             caption_path: config.caption_path,
             transcript: config.transcript,
             caption_mode: config.caption_mode,
@@ -567,24 +624,57 @@ impl AsrCaptureRuntime {
             performance,
             last_transcription: None,
             segment_start_ms: None,
-            last_transcript_text: String::new(),
+            segment_end_ms: 0,
+            segment_generation: 0,
+            pending_output: None,
+            transcribed_samples: 0,
         })
     }
 
     pub fn push_frame(&mut self, frame: &PcmAudioFrame, speech_detected: bool) {
+        let generation = self
+            .transcript
+            .as_ref()
+            .map_or(0, TranscriptRuntimeConfig::generation);
+        self.push_frame_with_generation(frame, speech_detected, generation);
+    }
+
+    fn push_frame_with_generation(
+        &mut self,
+        frame: &PcmAudioFrame,
+        speech_detected: bool,
+        generation: u64,
+    ) {
+        if self.segment_start_ms.is_some() && self.segment_generation != generation {
+            // Begin a fresh recognition chunk at consent changes, without saving earlier audio.
+            self.samples.clear();
+            self.pending_output = None;
+            self.segment_start_ms = None;
+            self.transcribed_samples = 0;
+            self.last_transcription = None;
+        }
         if !speech_detected {
+            if frame.timestamp_ms.saturating_sub(self.segment_end_ms) >= 600 {
+                self.finalize_segment();
+            }
             return;
         }
 
         if self.segment_start_ms.is_none() {
             self.segment_start_ms = Some(frame.timestamp_ms);
+            self.segment_generation = generation;
+        }
+        self.segment_end_ms = frame.timestamp_ms;
+
+        if frame.sample_rate == TARGET_SAMPLE_RATE && frame.channels == 1 {
+            self.samples.extend_from_slice(&frame.samples);
+        } else {
+            self.samples.extend(resample_to_16k_mono(frame));
         }
 
-        self.samples.extend(resample_to_16k_mono(frame));
-
-        if self.samples.len() > self.performance.max_transcribe_samples {
-            let extra = self.samples.len() - self.performance.max_transcribe_samples;
-            self.samples.drain(0..extra);
+        if self.samples.len() >= self.performance.max_transcribe_samples {
+            self.finalize_segment();
+            return;
         }
 
         if self.samples.len() < self.performance.min_transcribe_samples
@@ -593,61 +683,88 @@ impl AsrCaptureRuntime {
             return;
         }
 
-        let samples = self.samples.clone();
+        self.recognize_segment(false);
+    }
+
+    fn recognize_segment(&mut self, finalized: bool) {
+        if self.samples.len() < 4_000 {
+            return;
+        }
+        let preferences = self.preferences.lock().unwrap().clone();
+        self.caption_mode = preferences.mode;
+        self.translation = Some(TranslationRuntimeConfig::new(
+            crate::translation::TranslationSettings::default(),
+            preferences.translation_source_language,
+            crate::translation::TranslationLanguage::English,
+        ));
         self.last_transcription = Some(Instant::now());
 
         match self
             .engine
-            .transcribe(&samples, self.caption_mode, self.translation.as_ref())
+            .transcribe(&self.samples, self.caption_mode, self.translation.as_ref())
         {
             Ok(output) => {
                 let output = output.stabilized();
+                self.transcribed_samples = self.samples.len();
                 if !output.display_text.is_empty() {
-                    let speaker_label = self.speaker_labeler.label_for_samples(&samples);
-                    let _ = write_labeled_caption_state(
+                    let speaker_label = self.speaker_labeler.label_for_samples(&self.samples);
+                    if let Err(error) = write_labeled_caption_state(
                         &self.caption_path,
-                        "",
-                        &output.display_text,
+                        if finalized { &output.display_text } else { "" },
+                        if finalized { "" } else { &output.display_text },
                         self.source_label.as_deref(),
                         speaker_label.as_ref(),
-                    );
-                    self.append_transcript_output(&output, frame.timestamp_ms, speaker_label);
+                    ) {
+                        self.error = Some(error);
+                    }
+                    self.pending_output = Some((output, speaker_label));
                 }
             }
             Err(error) => {
-                eprintln!("{error}");
-                let _ = write_caption_state(&self.caption_path, "", "Transcription error");
+                let _ = write_caption_state(&self.caption_path, "", &error.user_message());
+                self.error = Some(error);
             }
         }
+        self.last_transcription = Some(Instant::now());
     }
 
-    fn append_transcript_output(
-        &mut self,
-        output: &AsrOutput,
-        end_ms: u64,
-        speaker_label: Option<SpeakerLabel>,
-    ) {
-        if output.display_text == self.last_transcript_text {
-            return;
+    fn finalize_segment(&mut self) {
+        if self.samples.len() != self.transcribed_samples {
+            self.pending_output = None;
+            self.recognize_segment(true);
         }
-
-        let Some(transcript) = &self.transcript else {
-            return;
-        };
-
-        let start_ms = self.segment_start_ms.unwrap_or(end_ms);
-        let _ = transcript.append_segment(TranscriptSegment {
-            start_ms,
-            end_ms,
-            original_text: output.original_text.clone(),
-            translated_text: output.translated_text.clone(),
-            source_label: self.source_label.clone(),
-            speaker_label: speaker_label.as_ref().map(|label| label.label.clone()),
-            speaker_confidence: speaker_label.map(|label| label.confidence),
-            is_final: true,
-        });
-        self.last_transcript_text = output.display_text.clone();
-        self.segment_start_ms = Some(end_ms);
+        if let Some((output, speaker)) = &self.pending_output {
+            let _ = write_labeled_caption_state(
+                &self.caption_path,
+                &output.display_text,
+                "",
+                self.source_label.as_deref(),
+                speaker.as_ref(),
+            );
+        }
+        if let (Some(transcript), Some((output, speaker_label)), Some(start_ms)) = (
+            &self.transcript,
+            self.pending_output.take(),
+            self.segment_start_ms,
+        ) {
+            transcript.append_segment(
+                TranscriptSegment {
+                    start_ms,
+                    end_ms: self.segment_end_ms,
+                    original_text: output.original_text.clone(),
+                    translated_text: output.translated_text.clone(),
+                    source_label: self.source_label.clone(),
+                    speaker_label: speaker_label.as_ref().map(|label| label.label.clone()),
+                    speaker_confidence: speaker_label.map(|label| label.confidence),
+                    is_final: true,
+                },
+                self.segment_generation,
+            );
+        }
+        self.samples.clear();
+        self.segment_start_ms = None;
+        self.transcribed_samples = 0;
+        self.last_transcription = None;
     }
 
     fn transcription_interval_elapsed(&self) -> bool {
@@ -699,10 +816,14 @@ impl AsrOutput {
 
     fn stabilized(self) -> Self {
         Self {
-            original_text: stabilize_caption_text(&self.original_text),
+            original_text: self
+                .original_text
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
             translated_text: self
                 .translated_text
-                .map(|text| stabilize_caption_text(&text))
+                .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
                 .filter(|text| !text.is_empty()),
             display_text: stabilize_caption_text(&self.display_text),
         }
@@ -743,10 +864,10 @@ pub fn write_labeled_caption_state(
     };
 
     let content = serde_json::to_string(&CaptionRuntimeState {
+        is_provisional: !provisional_text.is_empty(),
         committed_text,
         provisional_text,
         text,
-        is_provisional: true,
         updated_at_ms: current_timestamp_ms(),
         max_lines: CAPTION_MAX_LINES,
         source_label: source_label.and_then(normalize_source_label),
@@ -766,45 +887,14 @@ fn normalize_source_label(label: &str) -> Option<String> {
 }
 
 fn stabilize_caption_text(text: &str) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    truncate_caption_lines(&collapsed, CAPTION_MAX_LINES, CAPTION_MAX_CHARS_PER_LINE)
-}
-
-fn truncate_caption_lines(text: &str, max_lines: usize, max_chars_per_line: usize) -> String {
-    if text.is_empty() || max_lines == 0 || max_chars_per_line == 0 {
-        return String::new();
-    }
-
-    let mut lines = Vec::<String>::new();
-    let mut current = String::new();
-
-    for word in text.split_whitespace() {
-        let next_len = if current.is_empty() {
-            word.len()
-        } else {
-            current.len() + 1 + word.len()
-        };
-
-        if next_len > max_chars_per_line && !current.is_empty() {
-            lines.push(current);
-            current = word.to_string();
-        } else {
-            if !current.is_empty() {
-                current.push(' ');
-            }
-            current.push_str(word);
-        }
-    }
-
-    if !current.is_empty() {
-        lines.push(current);
-    }
-
-    if lines.len() > max_lines {
-        lines = lines[lines.len() - max_lines..].to_vec();
-    }
-
-    lines.join("\n")
+    text.lines()
+        .take(2)
+        .map(|line| {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            words[words.len().saturating_sub(40)..].join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn default_caption_max_lines() -> usize {
@@ -1021,6 +1111,160 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires FEELSAY_TEST_MODEL and FEELSAY_TEST_WAV controlled fixtures"]
+    fn real_model_recognizes_prerecorded_speech_and_saves_final_chunks() {
+        use crate::{
+            caption_settings::CaptionSettings,
+            performance_settings::PerformanceSettings,
+            transcript::{TranscriptService, TranscriptSettings},
+        };
+        let model_path =
+            PathBuf::from(std::env::var_os("FEELSAY_TEST_MODEL").expect("fixture model"));
+        let wave_path = PathBuf::from(std::env::var_os("FEELSAY_TEST_WAV").expect("fixture WAV"));
+        let dir = std::env::temp_dir().join(format!(
+            "feelsay-real-asr-test-{}-{}",
+            std::process::id(),
+            current_timestamp_ms()
+        ));
+        let transcripts = TranscriptService::new(dir.clone());
+        transcripts
+            .save_settings(TranscriptSettings {
+                saving_enabled: true,
+            })
+            .unwrap();
+        transcripts
+            .start_session("Prerecorded fixture".into())
+            .unwrap();
+        let preferences = CaptionSettings {
+            translation_source_language: TranslationLanguage::English,
+            ..Default::default()
+        };
+        let config = AsrRuntimeConfig {
+            preferences: Arc::new(std::sync::Mutex::new(preferences)),
+            model_path,
+            executable_path: None,
+            caption_path: dir.join("caption.json"),
+            transcript: transcripts.runtime_config(),
+            caption_mode: CaptionMode::Captions,
+            translation: None,
+            performance: PerformanceSettings::default().runtime(),
+            source_label: Some("Prerecorded fixture".into()),
+            speaker_labels_enabled: false,
+        };
+        let started = Instant::now();
+        let result = run_asr_file_diagnostic(config.clone(), wave_path.clone()).unwrap();
+        let elapsed = started.elapsed();
+        let text = result.text.to_lowercase();
+        assert!(
+            text.contains("country"),
+            "unexpected fixture recognition: {text}"
+        );
+        assert!(
+            text.contains("ask"),
+            "unexpected fixture recognition: {text}"
+        );
+        println!("Full prerecorded fixture recognition: {elapsed:?}: {text}");
+
+        let audio = read_pcm16_wav(&wave_path).unwrap();
+        let frame = PcmAudioFrame {
+            source_ids: Vec::new(),
+            samples: audio.samples,
+            sample_rate: audio.sample_rate,
+            channels: audio.channels,
+            timestamp_ms: 0,
+        };
+        let samples = resample_to_16k_mono(&frame);
+        let mut runtime = AsrCaptureRuntime::new(config).unwrap();
+        let started = Instant::now();
+        for (index, chunk) in samples.chunks(1600).enumerate() {
+            runtime.push_frame(
+                &PcmAudioFrame {
+                    source_ids: Vec::new(),
+                    samples: chunk.to_vec(),
+                    sample_rate: 16_000,
+                    channels: 1,
+                    timestamp_ms: index as u64 * 100,
+                },
+                true,
+            );
+        }
+        runtime.finalize_segment();
+        transcripts.finish_session().unwrap();
+        let sessions = transcripts.list_sessions(100).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].segment_count >= 2);
+        let text = transcripts
+            .read_session(sessions[0].id)
+            .unwrap()
+            .to_lowercase();
+        assert!(text.contains("country"));
+        println!(
+            "Finalized streaming fixture: {:?}, {} segments",
+            started.elapsed(),
+            sessions[0].segment_count
+        );
+        let repetitions = std::env::var("FEELSAY_TEST_REPETITIONS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(4)
+            .clamp(1, 120);
+        let mut durations = [0.0f64; 2];
+        for (saving, duration) in durations.iter_mut().enumerate() {
+            transcripts
+                .save_settings(TranscriptSettings {
+                    saving_enabled: saving == 1,
+                })
+                .unwrap();
+            transcripts
+                .start_session("Repeated prerecorded fixture".into())
+                .unwrap();
+            let started = Instant::now();
+            for iteration in 0..repetitions {
+                for (index, chunk) in samples.chunks(1600).enumerate() {
+                    runtime.push_frame(
+                        &PcmAudioFrame {
+                            source_ids: Vec::new(),
+                            samples: chunk.to_vec(),
+                            sample_rate: 16_000,
+                            channels: 1,
+                            timestamp_ms: iteration * 20_000 + index as u64 * 100,
+                        },
+                        true,
+                    );
+                }
+                runtime.push_frame(
+                    &PcmAudioFrame {
+                        source_ids: Vec::new(),
+                        samples: Vec::new(),
+                        sample_rate: 16_000,
+                        channels: 1,
+                        timestamp_ms: iteration * 20_000 + 19_000,
+                    },
+                    false,
+                );
+                assert!(
+                    runtime.samples.is_empty(),
+                    "silence must finalize and release the chunk"
+                );
+            }
+            *duration = started.elapsed().as_secs_f64();
+            transcripts.finish_session().unwrap();
+        }
+        let saved = transcripts.list_sessions(100).unwrap();
+        assert_eq!(saved.len(), 2, "disabled cycles must not create history");
+        assert!(saved
+            .iter()
+            .any(|session| u64::from(session.segment_count) >= repetitions * 2));
+        println!(
+            "{repetitions} streaming cycles: saving off {:.3}s; saving on {:.3}s",
+            durations[0], durations[1]
+        );
+        let state: CaptionRuntimeState =
+            serde_json::from_str(&fs::read_to_string(&runtime.caption_path).unwrap()).unwrap();
+        assert!(!state.is_provisional, "silence leaves a finalized caption");
+    }
+
+    #[test]
     fn downmixes_stereo_to_mono() {
         let samples = downmix_to_mono(&[0.2, 0.4, -0.2, 0.2], 2);
 
@@ -1036,15 +1280,18 @@ mod tests {
     }
 
     #[test]
-    fn stabilizes_caption_text_to_two_wrapped_lines() {
-        let text = stabilize_caption_text(
-            "one two three four five six seven eight nine ten eleven twelve thirteen fourteen",
+    fn caption_display_preserves_translation_boundary_and_unicode() {
+        assert_eq!(
+            stabilize_caption_text(" hello   world\ntranslated   text "),
+            "hello world\ntranslated text"
         );
-
-        assert!(text.lines().count() <= CAPTION_MAX_LINES);
-        assert!(text
-            .lines()
-            .all(|line| line.len() <= CAPTION_MAX_CHARS_PER_LINE));
+        assert_eq!(stabilize_caption_text("hello"), "hello");
+        assert_eq!(
+            stabilize_caption_text(&"word ".repeat(80))
+                .split_whitespace()
+                .count(),
+            40
+        );
     }
 
     #[test]
