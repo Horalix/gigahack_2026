@@ -1,0 +1,347 @@
+/* Styles for the doctor-facing pages. Everything is scoped under .doctor so
+   nothing leaks into the legacy caption screen at "/". Colours reuse the design
+   tokens defined in src/app.css; danger is added here because app.css has none. */
+
+.doctor {
+  --danger-fg: oklch(74% 0.15 25);
+  --danger-bg: oklch(32% 0.06 25);
+  --focus-ring: 0 0 0 2px var(--bgColor-default), 0 0 0 4px var(--borderColor-accent);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.doctor *,
+.doctor *::before,
+.doctor *::after {
+  box-sizing: border-box;
+}
+
+.doctor a {
+  color: var(--fgColor-accent);
+}
+
+.doctor h1,
+.doctor h2,
+.doctor h3 {
+  line-height: 1.25;
+  margin: 0;
+}
+
+.doctor h1 {
+  font-size: 1.6rem;
+}
+
+.doctor h2 {
+  font-size: 1.15rem;
+}
+
+.doctor h3 {
+  font-size: 1rem;
+}
+
+.doctor p {
+  margin: 0;
+}
+
+/* --- Page frame -------------------------------------------------------- */
+
+.doctor .page {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 24px 20px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.doctor .page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.doctor .page-head .meta {
+  margin-top: 6px;
+}
+
+.doctor .actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.doctor .grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+/* --- Surfaces ------------------------------------------------------------ */
+
+.doctor .card {
+  background: var(--bgColor-raised);
+  border: 1px solid var(--borderColor-default);
+  border-radius: var(--radius-default);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.doctor .card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.doctor .inset {
+  background: var(--bgColor-inset);
+  border-radius: var(--radius-default);
+  padding: 12px 14px;
+}
+
+.doctor .notice {
+  border-radius: var(--radius-default);
+  padding: 12px 14px;
+  border: 1px solid var(--borderColor-default);
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.doctor .notice.attention {
+  background: var(--bgColor-attention-muted);
+  border-color: color-mix(in oklch, var(--fgColor-attention) 40%, transparent);
+}
+
+.doctor .notice.danger {
+  background: var(--danger-bg);
+  border-color: color-mix(in oklch, var(--danger-fg) 40%, transparent);
+}
+
+.doctor .notice.success {
+  background: var(--bgColor-success-muted);
+  border-color: color-mix(in oklch, var(--fgColor-success) 40%, transparent);
+}
+
+.doctor .muted {
+  color: var(--fgColor-muted);
+}
+
+.doctor .subtle {
+  color: var(--fgColor-subtle);
+  font-size: 0.875rem;
+}
+
+.doctor .mono {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.85em;
+}
+
+.doctor .empty {
+  padding: 28px;
+  text-align: center;
+  color: var(--fgColor-subtle);
+}
+
+/* --- Controls ------------------------------------------------------------ */
+
+.doctor .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: var(--radius-default);
+  border: 1px solid var(--borderColor-emphasis);
+  background: transparent;
+  color: var(--fgColor-default);
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.doctor .btn:hover:not(:disabled) {
+  background: var(--button-secondary-bgColor-hover);
+}
+
+.doctor .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.doctor .btn:focus-visible,
+.doctor input:focus-visible,
+.doctor select:focus-visible,
+.doctor textarea:focus-visible,
+.doctor a:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.doctor .btn-primary {
+  background: var(--button-primary-bgColor-rest);
+  border-color: var(--button-primary-bgColor-rest);
+  color: oklch(20% 0.02 265);
+}
+
+.doctor .btn-primary:hover:not(:disabled) {
+  background: var(--button-primary-bgColor-hover);
+}
+
+.doctor .btn-danger {
+  border-color: color-mix(in oklch, var(--danger-fg) 50%, transparent);
+  color: var(--danger-fg);
+}
+
+.doctor .btn-ghost {
+  border-color: transparent;
+}
+
+.doctor .btn-sm {
+  padding: 4px 10px;
+  font-size: 0.875rem;
+}
+
+.doctor .btn-lg {
+  padding: 12px 20px;
+  font-size: 1.05rem;
+}
+
+.doctor .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.doctor .field > span {
+  font-size: 0.875rem;
+  color: var(--fgColor-muted);
+  font-weight: 500;
+}
+
+.doctor input[type="text"],
+.doctor input[type="search"],
+.doctor input[type="date"],
+.doctor input[type="datetime-local"],
+.doctor select,
+.doctor textarea {
+  font: inherit;
+  color: var(--fgColor-default);
+  background: var(--bgColor-inset);
+  border: 1px solid var(--borderColor-emphasis);
+  border-radius: var(--radius-default);
+  padding: 8px 10px;
+  width: 100%;
+  color-scheme: dark;
+}
+
+.doctor textarea {
+  resize: vertical;
+  min-height: 72px;
+  line-height: 1.5;
+}
+
+.doctor .segmented {
+  display: inline-flex;
+  border: 1px solid var(--borderColor-emphasis);
+  border-radius: var(--radius-default);
+  overflow: hidden;
+}
+
+.doctor .segmented button {
+  font: inherit;
+  border: 0;
+  background: transparent;
+  color: var(--fgColor-muted);
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+.doctor .segmented button[aria-pressed="true"] {
+  background: var(--bgColor-accent-muted);
+  color: var(--fgColor-default);
+  font-weight: 600;
+}
+
+/* --- Chips --------------------------------------------------------------- */
+
+.doctor .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.doctor .tone-neutral {
+  background: var(--bgColor-muted);
+  color: var(--fgColor-muted);
+}
+
+.doctor .tone-accent {
+  background: var(--bgColor-accent-muted);
+  color: var(--fgColor-accent);
+}
+
+.doctor .tone-success {
+  background: var(--bgColor-success-muted);
+  color: var(--fgColor-success);
+}
+
+.doctor .tone-attention {
+  background: var(--bgColor-attention-muted);
+  color: var(--fgColor-attention);
+}
+
+.doctor .tone-danger {
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+}
+
+/* --- Lists and tables ---------------------------------------------------- */
+
+.doctor .list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.doctor .list > li + li {
+  border-top: 1px solid var(--borderColor-muted);
+}
+
+.doctor .row-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 8px;
+  color: inherit;
+  text-decoration: none;
+  border-radius: 6px;
+}
+
+.doctor .row-link:hover {
+  background: var(--bgColor-muted);
+}
+
+.doctor .row-link.active {
+  background: var(--bgColor-accent-muted);
+}

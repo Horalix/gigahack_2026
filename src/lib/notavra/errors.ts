@@ -1,0 +1,66 @@
+import { tr } from './translations.svelte';
+
+const messages: Record<string, string> = {
+  transcript_reanalysis_required: 'The transcript changed. Reanalyze it before creating new minutes.',
+  transcript_required: 'There is no saved transcript to analyze yet.',
+  transcript_only_excludes_audio_stages: 'Transcript reanalysis does not run speech or speaker models.',
+  gap_already_corrected: 'This interval was already corrected. Edit its saved transcript instead.',
+  gap_overlaps_transcript: 'This interval now overlaps saved speech. Edit the existing transcript instead.',
+  audio_observation_not_found: 'This audio observation is no longer available. Refresh the review.',
+  correction_text_required: 'Enter corrected words and a reason for the change.',
+  recording_finalizing: 'This recording is still being saved. Wait a moment and retry.',
+  recording_chunk_corrupt: 'A saved audio chunk failed its integrity check. The other chunks are retained. Ask the operator to inspect the recording.',
+  stage_stalled: 'Processing stopped after a long period without activity. Your audio and saved work are retained. Retry or ask the operator to inspect local logs.',
+  implementation_changed_queue_new_job: 'The processing software changed. Start a new analysis from the saved audio.',
+  delivery_not_safe_to_retry: 'This delivery cannot be safely retried. Check its status on the mail server.',
+  cancel_processing_before_metadata_edit: 'Cancel or finish processing before changing meeting details.',
+  meeting_date_requires_reextraction: 'The meeting date changed. Process the audio again or correct the due date with a reason.',
+  account_not_found: 'This local account no longer exists. Refresh the account list.',
+
+  invalid_credentials: 'The username or password is incorrect.',
+  authentication_required: 'Please sign in again.',
+  login_rate_limit: 'Too many sign-in attempts. Wait a minute and try again.',
+  revision_conflict: 'This record changed. Refresh it before saving your changes.',
+  stale_snapshot: 'This preview is older than the current review. Create a new preview.',
+  review_incomplete: 'Accept or exclude every review item before creating minutes.',
+  processing_incomplete: 'Wait for audio processing to finish.',
+  approval_required: 'Approve this version before sending it.',
+  recipient_group_changed: 'The recipient group changed. Review the recipients again.',
+  recipient_outside_allowed_domains: 'An address is outside the allowed recipient domains.',
+  older_version_requires_explicit_choice: 'Explicitly select the older approved version before sending it.',
+  stale_evidence_requires_reextraction: 'The source transcript changed. Process the audio again before accepting this item.',
+  critical_value_unresolved: 'Resolve the uncertain critical value before accepting this item.',
+  no_changes: 'There are no changes to save.',
+  unsupported_audio_type: 'Choose a WAV, MP3, M4A, OGG, FLAC or WebM audio file.',
+  audio_decode_failed: 'This audio could not be read. Check its format and duration.',
+  upload_too_large: 'The audio exceeds the upload limit configured by the operator.',
+  storage_low: 'There is not enough free storage to continue safely. Saved recordings and acknowledged chunks are retained. Free space and retry.',
+  storage_io_failed: 'The storage operation failed. Saved work is retained. Check the storage device and retry.',
+  request_too_large: 'The request is too large. Reduce the file or text size.',
+  missing_chunks: 'Some audio chunks are not saved yet. Retry the unsaved chunks.',
+  chunk_content_conflict: 'This audio chunk conflicts with an already saved chunk.',
+  recording_sealed: 'This recording has already been finalized.',
+  invalid_timezone: 'Enter a valid timezone, such as Europe/Chisinau.',
+  invalid_glossary_term: 'Each glossary term must be one line and at most 100 characters.',
+  data_conflict: 'This entry conflicts with an existing record.',
+  cancel_processing_before_deletion: 'Cancel active processing before deleting this meeting.',
+  deletion_confirmation_conflict: 'The meeting changed or the confirmation title does not match.',
+  csrf_denied: 'Your session could not be verified. Refresh and sign in again.',
+  origin_denied: 'Open the application at its configured local address.',
+  setup_requires_loopback: 'Create the first account from this computer.',
+  setup_already_complete: 'An account already exists. Sign in to continue.',
+  job_not_retryable: 'This job cannot be retried in its current state.',
+  parakeet_not_prepared: 'The optional recognizer is not prepared. Use the baseline recognizer.',
+  diarization_not_prepared: 'Automatic speaker labeling is not prepared. You can label speakers manually.',
+  smtp_transport_error: 'Mail delivery could not be confirmed. Ask the operator to inspect the local mail service before retrying.',
+  some_recipients_refused: 'Some recipients were refused. Ask the operator to check delivery before retrying.',
+  worker_interrupted_during_send: 'Sending was interrupted. Delivery is uncertain; check the mail service before retrying.',
+};
+
+export function errorMessage(code: string): string {
+  if (code.endsWith('_failed_see_local_log')) return tr('Processing failed. Source audio is retained. Retry or ask the operator to inspect local logs.');
+  if (['admin_required', 'member_admin_required', 'read_only'].includes(code))
+    return tr('Your account does not have permission for this change.');
+  if (code.endsWith('_not_found')) return tr('This record is unavailable or you do not have access.');
+  return tr(messages[code] || 'The request failed. Check the form, refresh, and try again.');
+}

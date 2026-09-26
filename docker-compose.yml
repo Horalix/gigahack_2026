@@ -1,16 +1,122 @@
-# Local mail sink for the meeting-minutes delivery stage.
+# Secure MOM local stack: web UI, meeting API, job worker and mail sink.
 #
-# Mailpit accepts SMTP on 1025 and files messages into a web inbox on 8025.
-# It does not forward anything onward unless explicitly configured to (see the
-# egress note below), so minutes never leave this machine.
+#   docker compose up -d --build     # first run, and after dependency changes
+#   docker compose up -d             # later runs; starts offline once built
+#   docker compose ps
+#   docker compose logs -f api worker web
+#   docker compose down              # add -v to also drop meetings and mail
 #
-#   docker compose up -d
-#   docker compose logs -f mailpit
-#   docker compose down            # add -v to also drop captured mail
-#
+# App:   http://127.0.0.1:1420         API through the same origin: /api/...
 # Inbox: http://127.0.0.1:8025
+#
+# NVIDIA GPU (untested on a machine without one):
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+#
+# Build while online: every download (apt, pip, npm, base images) happens at
+# build time. Model weights are never downloaded here; prepare them on the host
+# with scripts/hackathon/prepare-models.ps1 and they are mounted read-only.
+
+x-meeting-service: &meeting-service
+  build:
+    context: .
+    dockerfile: docker/meeting.Dockerfile
+    target: cpu
+  init: true
+  restart: unless-stopped
+  volumes:
+    # SQLite + uploaded media. A named volume, not a Windows bind mount:
+    # SQLite WAL locking is unreliable across the Windows-to-Linux file share,
+    # and the API and worker both write this database.
+    - meeting-data:/data
+    # Model weights prepared on the host, read-only. Override the host path
+    # with MOM_HOST_MODEL_DIR. An empty folder is fine until a job starts: job
+    # start then fails closed on the missing asset, by design.
+    - ${MOM_HOST_MODEL_DIR:-${LOCALAPPDATA}/SecureMOM/models}:/models:ro
 
 services:
+  api:
+    <<: *meeting-service
+    container_name: securemom-api
+    environment:
+      # Profile is resolved and frozen into each job when the API creates it,
+      # so this setting decides CPU vs GPU for new jobs, not the worker's.
+      MOM_PROFILE: ${MOM_PROFILE:-cpu}
+      # SYNTHETIC DEV ONLY. Enables the temporary X-Demo-Principal hook in
+      # api.py. PBI-005 replaces it with real local authentication; do not use
+      # this stack with real patient data until then.
+      MOM_SYNTHETIC_DEV: "1"
+    ports:
+      # Published here because `web` shares this container's network
+      # namespace. Only the web app's port is exposed; the API itself listens
+      # on 127.0.0.1:8000 inside the namespace and is not published at all.
+      - "127.0.0.1:1420:1420"
+    # Security boundary, stated precisely: everything that can reach the Vite
+    # proxy on 1420 is treated as loopback by the API. The host port is bound to
+    # 127.0.0.1, so nothing off this machine can reach it. Other containers ON
+    # this machine can, whatever network they are on: Docker 29 blocks
+    # cross-network traffic to unpublished ports but lets any container reach a
+    # published port by container IP (verified both ways). The separate network
+    # below is hygiene, not the boundary. The boundary is "this machine", which
+    # is what the synthetic-dev hook assumes; PBI-005 authentication is the real
+    # control, and real patient data waits for it.
+    networks: [app]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  worker:
+    <<: *meeting-service
+    container_name: securemom-worker
+    command: ["python", "-m", "services.meeting.jobs"]
+    environment:
+      MOM_PROFILE: ${MOM_PROFILE:-cpu}
+    # The worker only reads the shared database and media and runs local
+    # inference. It gets no network interface at all: the process that touches
+    # audio and model weights cannot reach anything, local or remote.
+    network_mode: none
+    depends_on:
+      api:
+        condition: service_healthy   # API applies schema migrations first
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    container_name: securemom-web
+    init: true
+    restart: unless-stopped
+    # Why the web container shares the API's network namespace:
+    #
+    # The API's synthetic-dev check admits requests only when the socket peer
+    # is loopback. Across a normal Docker network the peer is a container or
+    # gateway address, so every request would be denied. Sharing the namespace
+    # makes Vite's /api proxy reach the API on 127.0.0.1 genuinely, which is
+    # the same trust path as running both natively. No header is forged and
+    # api.py is unchanged.
+    network_mode: service:api
+    environment:
+      VITE_USE_POLLING: "1"   # file events do not cross the Windows bind mount
+      # Dev-only fake Tauri runtime so the legacy caption screen at "/" renders
+      # in a browser (see src/lib/dev/tauri-mock.ts). The doctor pages do not
+      # use it. Set to "0" to see how the browser path behaves without it.
+      VITE_TAURI_MOCK: "1"
+    volumes:
+      # Source only, read-only. node_modules and .svelte-kit stay inside the
+      # container, so Linux binaries never mix with the Windows checkout.
+      # Changes to vite.config.js, svelte.config.js or package.json need
+      # `docker compose up -d --build web` (or a restart for the configs).
+      - ./src:/app/src:ro
+      - ./static:/app/static:ro
+      - ./svelte.config.js:/app/svelte.config.js:ro
+      - ./vite.config.js:/app/vite.config.js:ro
+      - ./tsconfig.json:/app/tsconfig.json:ro
+    depends_on:
+      api:
+        condition: service_healthy
+
   mailpit:
     # Pinned by tag AND digest. A bare tag can be re-pointed upstream; the digest
     # makes `up` reproducible and lets it start with no network at all, provided
@@ -62,5 +168,16 @@ services:
     volumes:
       - mailpit-data:/data
 
+    # Kept on its own network: the two services share no segment they do not
+    # need. (This does not stop it reaching the API's published proxy port; see
+    # the note on `api`.) When delivery is integrated, submit from the API side
+    # to host.docker.internal:1025 rather than joining the networks.
+    networks: [mail]
+
 volumes:
   mailpit-data:
+  meeting-data:
+
+networks:
+  app: {}
+  mail: {}
