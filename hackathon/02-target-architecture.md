@@ -1,6 +1,6 @@
 # Target architecture and shared contracts
 
-**Proposed implementation; none of the new paths below exist in the baseline.** Keep this repository and Svelte. Add one local Python service for meeting jobs, ASR/LLM adapters, SQLite, and delivery. Avoid a fleet of new microservices in 48 hours.
+**Proposed implementation; none of the new paths below exist in the baseline.** Keep this repository and Svelte. Add one local Python service for meeting jobs, ASR/LLM adapters, SQLite, and final documents. The PBI index governs today's implementation. Affan owns mailing; only the file boundary is specified here.
 
 ## One complete path
 
@@ -18,8 +18,10 @@ flowchart TD
     LLM --> CHECK[Schema + evidence + date/owner checks]
     CHECK --> STATE[Final decisions and action state]
     STATE --> RENDER[Deterministic HTML / text minutes]
-    RENDER --> OUTBOX[Transactional delivery outbox]
-    OUTBOX --> SMTP[Local SMTP / Mailpit]
+    RENDER --> FILE[Versioned final artifact ready]
+    FILE --> AFFAN[Affan consumes file and owns mailing]
+    DASH[Patient dashboard: search and pagination] --> WEB
+    API --> ACCESS[Local access and explicit patient links]
     TRANSCRIPT -. after P0 .-> SPEAKERS[Optional diarization and name mapping]
     SPEAKERS -.-> STATE
     CHECK -->|Ambiguous item| REVIEW[Focused review or explicit unresolved field]
@@ -52,43 +54,44 @@ References: [MediaRecorder chunk behavior](https://developer.mozilla.org/en-US/d
 | Tauri source picker/capture | Reuse if needed for native capture; required browser live mode follows first upload integration and persists audio independently |
 | Native Whisper | Keep as existing caption capability/possible later CPU adapter; new batch worker first |
 | SQLite/history ideas | Reuse patterns; separate meeting database so old history/schema are not accidentally migrated |
-| Overlay and appearance settings | Leave intact; not on the competition's critical path |
+| Overlay and appearance settings | Remove launch from doctor flow, tray and shortcuts; retain legacy renderer pending separate cleanup |
 | Model downloader | Reuse checksum lessons; new offline manifest/preflight governs the meeting pipeline |
-| Meeting API, jobs, LLM, minutes, mail | New implementation |
+| Patients, access, meeting API, jobs, LLM, minutes | New implementation; mailing belongs to Affan |
 
-Recommended page: `/meetings`. It works in an ordinary browser and can also be opened in Tauri. Any shared layout/titlebar must guard native imports and calls in browser mode. Existing caption route can remain available; no need to rewrite the overlay or change frameworks.
+Entry: `/` doctor dashboard, with `/patients` and `/meetings` routes. Browser-safe components guard native imports/calls. No floating subtitle window opens in the doctor journey. Patient links are explicit operator metadata and never grant access to an entire multi-patient meeting. See [patient/data rules](09-patient-data-and-eu.md).
 
 ## Proposed additions and ownership
 
 ```text
-src/routes/meetings/                 # Dev B: home, setup, upload/record, progress, minutes
-src/lib/components/meetings/         # Dev B: reusable meeting UI
-src/lib/api/meetings.ts              # Dev B: HTTP client, no Tauri dependency
-contracts/meeting.schema.json        # Dev A owns; both approve changes
+src/routes/meetings/                 # App developer: home, setup, upload/record, progress, minutes
+src/lib/components/meetings/         # App developer: reusable meeting UI
+src/lib/api/meetings.ts              # App developer: HTTP client, no Tauri dependency
+contracts/meeting.schema.json        # App developer owns; coordinate consumers
 services/meeting/
-  pyproject.toml + lockfile          # Dev A: pinned Python environment
-  api.py                            # Dev A: meeting/job/profile endpoints
-  contracts.py                      # Dev A: strict validated models
-  jobs.py + pipeline.py             # Dev A: persistent states, stage orchestration
-  storage.py                        # Dev A: SQLite transactions and assets
-  capture.py                        # Dev B with A: chunk ingest, assembly, recording state
-  adapters/asr.py + llm.py           # Dev A: runtime-specific code
-  decisions.py                      # Dev A: final state and validation
-  review.py                         # Dev A: versioned edits, bounded issues, invalidation
-  models.py                         # Dev A: manifest/profile resolution
-  rendering.py + templates/          # Dev B: deterministic minutes
-  delivery.py                       # Dev B: local SMTP outbox worker
-  speakers.py                       # Dev A: later optional diarization/enrollment
+  pyproject.toml + lockfile          # App developer: pinned Python environment
+  api.py                            # App developer: meeting/job/profile endpoints
+  contracts.py                      # App developer: strict validated models
+  jobs.py + pipeline.py             # App developer: persistent states, stage orchestration
+  storage.py                        # App developer: SQLite transactions and assets
+  capture.py                        # App developer: chunk ingest, assembly, recording state
+  adapters/asr.py + llm.py           # App developer: runtime-specific code
+  decisions.py                      # App developer: final state and validation
+  review.py                         # App developer: versioned edits, bounded issues, invalidation
+  models.py                         # App developer: manifest/profile resolution
+  rendering.py + templates/          # App developer: deterministic minutes
+  artifacts.py                      # App developer: revision-bound final files
+  auth.py + patients.py              # App developer: permissions and directory
+  retention.py                      # App developer: deletion of derivatives
+  speakers.py                       # App developer: later optional diarization/enrollment
   tests/                            # Owning developer: targeted tests
-config/profiles/                     # Dev A: laptop8, hospital16, cpu
-config/recipient-groups.json         # Dev B: synthetic/local recipients
-models/manifest.json                 # Dev A: artifact hashes and local paths
-scripts/hackathon/                   # Dev B: prepare, preflight, launch, smoke
-evaluation/                         # Dev A metrics; CEO gold labels and reports
-artifacts/                          # Ignored recordings/outputs; never commit real data
+config/profiles/                     # App developer: laptop8, hospital16, cpu
+models/manifest.json                 # App developer: artifact hashes and local paths
+scripts/hackathon/                   # App developer: prepare, preflight, launch, smoke
+evaluation/                         # App developer metrics; CEO gold labels and reports
+External configured data directory  # Outside Git/OneDrive: DB, audio and outputs
 ```
 
-Names describe boundaries, not a demand to create every file before the first result. Start with the few modules required for the vertical slice. Dev A owns schema migrations; Dev B uses the storage interface for delivery transactions.
+Names describe boundaries, not a demand to create every file before the first result. Start with the few modules required for the vertical slice. The app developer owns contracts/migrations; Affan consumes the agreed file boundary. Model assignments are in the PBIs.
 
 <details>
 <summary><strong>Developer / AI appendix: shared contracts and implementation rules</strong></summary>
@@ -99,7 +102,7 @@ All times are integer milliseconds relative to the original asset; meeting date/
 
 | Object | Required fields / behavior |
 |---|---|
-| Meeting | `id`, title, recording date/timezone, selected type, suggested type, output language, participant list, recipient group ID, status |
+| Meeting | `id`, title, recording date/timezone, selected type, suggested type, output language, participant list, explicit patient links, status |
 | AudioAsset | `id`, meeting ID, local storage key, SHA-256, duration, channels, sample rate; source retained |
 | Job | ID, meeting ID, state, current stage, error code, frozen resolved model config, timestamps, artifact references |
 | Segment | ID, revision, asset ID, start/end, original text, optional words/language spans, nullable speaker cluster ID |
@@ -108,28 +111,31 @@ All times are integer milliseconds relative to the original asset; meeting date/
 | ReviewIssue / TranscriptEdit | Exact revision/span, optional suggestions, disposition, actor and batch provenance; see [review contract](07-transcript-review.md) |
 | Event | ID, item ID, kind `propose/confirm/amend/reject/cancel`, sequence, payload, evidence; acceptance assigned by validator |
 | MoM snapshot | Meeting ID, revision, decisions/actions, unresolved items, source/model revisions, canonical content hash |
-| Delivery | Snapshot ID/hash, configured recipient-group version, stable delivery key/Message-ID, attempt count and SMTP status |
+| OutputArtifact | Stable ID, meeting/snapshot revision, local path/storage key, MIME, checksum, ready/superseded/revoked status; format/trigger agreed with Affan |
+| Patient / PatientLink | Opaque ID, organization scope, minimal display fields; operator-confirmed links with independent object permissions |
 
 **P0 state:** accepted actions and rejected/unresolved items, with source references. Handle explicit final owner/date corrections across the whole meeting. **P1 expansion:** complete event history and interactive before/after evidence. Do not implement last-mention-wins: a later suggestion does not override a confirmed decision.
 
-API proposal (freeze exact JSON with fixtures at H0–H2):
+API proposal (freeze exact JSON with fixtures in PBI-001):
 
 | Route | Behavior |
 |---|---|
-| `POST /api/meetings` | Validates metadata and configured recipient group; creates draft |
+| `POST /api/meetings` | Validates metadata and authorized patient links; creates draft |
 | `POST /api/meetings/{id}/audio` | Bounded audio/video upload; safe audio decode; durable source + hash |
 | `POST /api/meetings/{id}/recordings` | Create live recording session with selected MIME/codec and sequence state |
 | `PUT /api/recordings/{id}/chunks/{sequence}` | Idempotent ordered chunk ingest; acknowledge only after durable write |
 | `POST /api/recordings/{id}/stop` | Seal recording after final chunk acknowledgment; finalize existing job |
 | `POST /api/meetings/{id}/jobs` | Validates profile/assets, freezes config, queues processing |
 | `GET /api/jobs/{id}` | State/stage/elapsed/errors; polling is enough initially |
-| `GET /api/meetings/{id}` | Meeting, timed transcript, latest minutes, delivery status |
+| `GET /api/meetings/{id}` | Authorized meeting, transcript, minutes, artifact status |
 | `GET /api/profiles` | Installed profile/model choices, backend compatibility and readiness |
 | `GET /api/meetings/{id}/audio` | Authorized range/playback from stored asset; not arbitrary file paths |
-| `PATCH /api/meetings/{id}/review` | Later: versioned correction and dependent-result invalidation |
+| `PATCH /api/meetings/{id}/review` | P0: versioned correction and dependent-result invalidation |
 | `PATCH /api/meetings/{id}/speakers/{cluster}` | Later: explicit cluster-to-participant mapping |
 
-Job states: `queued -> decoding -> transcribing -> extracting -> validating -> rendering -> delivering -> complete`; any stage can enter `failed`, with a retry from a valid checkpoint. `needs_review` applies only where publication cannot proceed under policy. Distinguish job failure from delivery failure; SMTP retries must not rerun ASR.
+Job states: `queued -> decoding -> transcribing -> extracting -> validating -> rendering -> ready`. Processing failures retry from valid checkpoints; `needs_review` holds unresolved publication. Artifact readiness is separate from Affan's delivery outcome.
+
+PBI-006 adds authenticated patient create/detail/search routes. Apply access filtering before search/count/pagination: default 25, maximum 100, stable normalized-name/ID cursor order. Protect media and exports as well as list pages.
 
 Live recording state is independent: `starting -> recording -> stopping -> sealed`, or `interrupted`. ASR can be processing or failed while capture remains healthy. Poll the meeting for provisional segments initially; a new socket protocol is unnecessary for the MVP.
 
@@ -141,9 +147,9 @@ Live recording state is independent: `starting -> recording -> stopping -> seale
 - LLM receives transcript as untrusted data and has no tools. It cannot choose recipients, invoke external URLs, set `verified`, or issue clinical orders.
 - Validate output shape, cited segments/quotes, date interpretation, and explicit commitments. Structural validation alone does not prove semantic truth. Unknown owner/date stays null; ambiguous dose stays unresolved.
 - Render official minutes from accepted state, escaping text. Do not ask another unconstrained generation pass to rewrite approved facts.
-- Delivery transaction binds snapshot hash and recipient group. SMTP timeout after submission is ambiguous: retain stable IDs, show uncertain status, avoid promising exactly-once delivery.
-- Access: loopback single-operator demo first. If opening to LAN, require local authentication and meeting-scoped checks on media/export routes. Keep ports narrow, browser assets local, and inference servers on loopback. Do not claim hospital production readiness.
+- Publish final files atomically with current snapshot revision/hash. Edits revoke/supersede eligibility; agree consumption semantics with Affan.
+- Local authentication and object-scoped checks are P0, including loopback. Keep inference servers on loopback, assets local and sensitive files outside the OneDrive checkout. Trusted HTTPS is needed for LAN microphones. This is not a production-readiness claim.
 - Source edits or speaker changes increment revision and invalidate affected extracted fields/snapshots. A distributed snapshot remains immutable; a correction creates a superseding version.
-- Manual transcript editing/undo is P0; bounded AI error flags are P1. Follow [07](07-transcript-review.md) for keyboard UX, bulk replacement, Unicode spans, stale-edit conflicts, evidence rebuild and delivery races. Unaccepted suggestions never enter authoritative text.
+- Manual transcript editing/undo is P0; bounded AI error flags are P1. Follow [07](07-transcript-review.md) for keyboard UX, bulk replacement, Unicode spans, stale-edit conflicts, evidence rebuild and artifact handoff races. Unaccepted suggestions never enter authoritative text.
 
 </details>

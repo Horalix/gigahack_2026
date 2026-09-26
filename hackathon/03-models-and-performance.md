@@ -129,4 +129,4 @@ Hold original RO/RU/EN text throughout. Do not translate the whole recording int
 
 Download and pin every model, tokenizer, VAD/diarization asset, runtime dependency, font, and frontend bundle before disconnecting. Preflight verifies hashes and local paths. Disable runtime downloads/telemetry in dependencies and deny external egress at the host/container boundary. A missing model is a setup error. Record allowed LAN destinations; local SMTP must have no external relay.
 
-By H24, run the hour test. If it exceeds 900 seconds, identify the largest stage, cap redundant tokens/retries, and reduce batch/context/model only with quality regression checks. Treat an unmet target honestly; neither the old English fixture nor a faster GPU extrapolation proves success.
+Run the hour test at today's PBI-017 checkpoint (see the PBI index). If it exceeds 900 seconds, identify the largest stage, cap redundant tokens/retries, and reduce batch/context/model only with quality regression checks. Treat an unmet target honestly; neither the old English fixture nor a faster GPU extrapolation proves success.

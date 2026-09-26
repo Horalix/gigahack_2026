@@ -45,16 +45,16 @@ flowchart TD
     REV --> RECHECK[Re-extract affected context + reconcile final decisions]
     RECHECK --> MOM[New minutes snapshot]
     DRAFT --> MOM
-    MOM --> SEND[Automatic permitted local delivery or focused hold]
+    MOM --> FILE[Current final artifact or focused hold]
 ```
 
 Unaccepted suggestions never enter authoritative text or minutes. If a flagged uncertainty affects a proposed published commitment, owner, date, or clinical value, hold that field/item or mark it unresolved under existing publication policy. Harmless flags must not block the entire meeting. Unflagged/valid output retains automatic delivery; do not make every user approve every word.
 
-After delivery, edits create a superseding snapshot and message; the original message remains immutable. Mark minutes' review state accurately. Never imply a doctor approved an automatically generated document.
+After handoff, edits create a superseding snapshot/artifact through the agreed boundary with Affan. Distributed copies cannot be retroactively changed. Mark minutes' review state accurately. Never imply a doctor approved an automatically generated document.
 
 ## Developer / AI contract
 
-Proposed files: `services/meeting/review.py`, `src/lib/components/meetings/transcript-review.svelte`; extend existing proposed contracts/storage/meeting API instead of creating another pipeline. Dev A owns candidate generation, validation and revisions. Dev B owns selection, keyboard navigation, replay, preview and undo.
+Proposed files: `services/meeting/review.py`, `src/lib/components/meetings/transcript-review.svelte`; extend existing proposed contracts/storage/meeting API instead of creating another pipeline. The app developer owns this flow: Sol for revision/state semantics and flags, Luna for UI. Affan owns mailing separately.
 
 | Record | Fields / rule |
 |---|---|
@@ -67,9 +67,9 @@ Use Unicode code-point offsets with half-open ranges; convert JavaScript UTF-16 
 
 Apply a reviewed batch atomically with optimistic revision checking. Reject a stale batch rather than patching the wrong words. Preserve immutable source revisions; compute new display offsets and regenerate/invalidate affected flags. Undo creates a new inverse edit revision; it does not erase the audit trail. Replacement words retain the original supporting audio interval and are labeled human-edited, not falsely word-aligned by ASR.
 
-Proposed API additions: `GET /api/meetings/{id}/review-issues`; `POST /api/meetings/{id}/transcript-edits`; `POST /api/meetings/{id}/transcript-edits/{batch}/undo`. Existing review endpoint can handle issue disposition; agree one implementation with Dev A. Responses return revision, changed issue IDs, and downstream status.
+Proposed API additions: `GET /api/meetings/{id}/review-issues`; `POST /api/meetings/{id}/transcript-edits`; `POST /api/meetings/{id}/transcript-edits/{batch}/undo`. Existing review endpoint can handle issue disposition; agree one implementation in PBI-001. Responses return revision, changed issue IDs, and downstream status.
 
-Invalidate affected evidence, extracted events and unsent snapshots. Re-extract enough surrounding context, then reconcile globally because a local edit can alter a late correction or earlier action reference. Before SMTP submission, verify the snapshot is still current and eligible. Already submitted mail is superseded explicitly. Never send stale minutes during an edit/rebuild race.
+Invalidate affected evidence, extracted events and unsent snapshots. Re-extract enough surrounding context, then reconcile globally because a local edit can alter a late correction or earlier action reference. At artifact handoff, verify the snapshot is current and eligible. Publish superseded/revoked state when edits invalidate it and coordinate consumption with Affan. Never mark stale minutes ready during a rebuild race.
 
 ## Fit within the processing budget
 
@@ -85,5 +85,5 @@ All automatic flagging time counts in the 900-second machine budget. Reviewer ti
 - Test repeated term with one true variant, consistently wrong repeated term, out-of-glossary name, ambiguous number, actual negation, mid-sentence switch, and editing during pending delivery.
 - Report **raw ASR accuracy**, **automatic flag precision/recall**, **suggestion correctness**, **human-reviewed accuracy**, and **review time/actions** separately. Also count correct words the system wrongly recommends changing.
 - Compare assisted review with ordinary editing on matched unseen clips; counterbalance order/reviewers where possible. Do not attribute human corrections to ASR model improvement.
-- H32–H36 experiment after P0 passes: if flags create excessive unnecessary work or regress the time gate, retain manual editing/replay and disable AI suggestions in the release. No new model is needed to keep the feature useful.
+- PBI-018: maximum 90-minute experiment after all P0 passes: if flags create excessive unnecessary work or regress the time gate, retain manual editing/replay and disable AI suggestions in the release. No new model is needed to keep the feature useful.
 

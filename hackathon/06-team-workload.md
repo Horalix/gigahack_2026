@@ -1,67 +1,48 @@
-# Two developers + CEO: 48-hour execution
+# Today: app developer, Affan and CEO
 
-**Assign names at kickoff.** Dev A owns speech/intelligence/core state. Dev B owns the product UI, rendering, delivery, and launch. CEO owns test material, human evaluation, organizer clarification, pitch, and demo operations. The clock below is elapsed time; plan sleep and staggered breaks, not 48 continuous working hours per person.
+**26 September 2026.** Current task order and checkpoints live in [the PBI index](pbis/README.md). Affan's mailing branch is independent; do not assume two developers are available for the rest of the app.
 
-## Ownership boundaries
+## Ownership
 
-| Person | Owns | First action |
+| Person | Owns | Start |
 |---|---|---|
-| Dev A | `services/meeting/` core API/storage/jobs/adapters/decisions/models; model configs; contracts; metrics | Inventory GPU and get one local audio file transcribed |
-| Dev B | `src/` meeting UI/client; `rendering.py`, `delivery.py`, templates; recipient config; launch scripts | Build upload/progress/result flow against shared fixture; run local Mailpit |
-| CEO | `evaluation/` reference data/report with A; demo/presentation; checklist tracking | Confirm brief, collect permitted audio, define expected decisions with language reviewers |
+| You + Luna/Sol | App contracts, local service/inference, dashboard/patients, upload/live, editing, final file, privacy and packaging | PBI-001, then 002-004; UI uses frozen fixtures |
+| Affan | Mailing, in his branch | Agree file format and handoff trigger; no implementation plan here |
+| Semi-technical CEO | Permitted test material, human references, acceptance tracking, organizer questions, slides, rehearsal | PBI-024 immediately; support 017 and inventory 022 |
 
-Dev A owns dependencies/schema changes in the Python service. Dev B requests additions and owns mail/render module internals. Agree the outbox/storage interface early; Dev B must not create a competing SQLite schema. Both approve shared contract changes. Frontend dependencies and scripts belong to B; model manifests/profile settings belong to A.
+Our side hands Affan a finalized revision-bound file. Agree accepted format, how its path/readiness is supplied, and how superseded files are identified. PBI-001 supplies a concrete fixture. Observe the integrated outcome before claiming challenge completion.
 
-## Schedule
+## Which execution model
 
-| Elapsed | Dev A | Dev B | CEO | Integration outcome |
-|---|---|---|---|---|
-| H0–H2 | GPU/runtime inventory; model acquisition; contract + fixture | Browser API boundary; upload UI skeleton; Mailpit | Organizer questions, evaluation audio permissions, shortlist of human reviewers | H01 contract frozen; assets downloading |
-| H2–H6 | H02 + first H03 ASR path | H04 against fixture; H06 renderer/mail with synthetic approved result | Write gold actions for clips; collect mixed-language test speech | Real audio produces transcript; UI/mail plumbing works |
-| H6–H12 | H05 local extraction + final state; connect pipeline | Wire real API; automatic routing/delivery; clear errors | Check actual output, log errors by consequence; draft pitch story | New short recording -> minutes -> Mailpit |
-| H12–H20 | Connect incremental ASR to saved live windows; fix language/decision failures | H12 live recording/chunk persistence; offline launch/preflight; retry UI | Run upload/video/live acceptance; annotate held-out samples; draft slides | Both required input modes work; reproducible launch |
-| H20–H24 | One-hour upload run and bottleneck analysis; compare remote 16 GB host on permitted fixtures | Test long live capture and video decode; fix recovery; package working version | Time both paths, capture results, verify late correction | Upload benchmark + live finalization measurement + cold-start evidence |
-| H24–H32 | Close P0 accuracy/time gates; H16 edit revisions and dependent rebuild | H16 manual edit/batch preview/undo; close P0 UI/delivery gates | Test new operator correction and automatic flows; refine benchmark slide | All mandatory gates green or explicit no-go on extras |
-| H32–H40 | If green: H17 bounded flags, then H10 history; H11 only if time remains | If green: H17 find-like review + shared replay drawer, then H10 history | Measure false suggestions/review effort; surprise paraphrase; demo rehearsal | One coherent differentiator; release candidate frozen |
-| H40–H46 | Fix regressions only; verify model/config freeze | Bundle/launch checks; demo screen readability; backup | Practice timed pitch/Q&A; verify submission requirements | Three complete rehearsals, one disconnected cold start |
-| H46–H48 | Technical support and submission verification | Technical support and submission verification | Lead submission, presentation, demo | Reproducible artifact and honest claims |
+- **Luna first:** UI, schema fixtures, model configuration, patient API/search/pagination, renderer, scripts, benchmark harness and documentation.
+- **Sol:** durable jobs/capture, GPU adapter, local LLM decision semantics, permissions, atomic revisions and deletion.
+- **Astra:** planning by default. No implementation PBI assigned; escalate only an isolated difficult issue that Sol cannot resolve, with user choice on the additional cost.
 
-Reserve rest explicitly across H12–H32 and coordinate handoffs. If effective engineering capacity shrinks, drop P1/P2 first. If A's inference lane blocks the first complete flow, B finishes minimal UI/mail and helps integration; CEO continues independent labeling/presentation work.
+Use the assigned PBI's reasoning level. One owner per shared contract/migration/lockfile. Independent worktrees may use fixtures, but only real integration passes acceptance. No background executor agents were launched by this planning task.
 
-## First tickets to hand off
+## CEO work that unblocks development
 
-**Dev A — H01/H02/H03:** read [architecture/contracts](02-target-architecture.md) and [profiles](03-models-and-performance.md). Deliver a bounded local upload/job API producing durable timed multilingual transcript JSON. Freeze fixture and API errors with B. Validate real audio and missing-model failure; do not start enrollment or multi-model retries.
+1. Confirm submission deadline/demo length, evaluation permissions and any organizer requirements needing clarification. Coordinate mail-specific requirements directly with Affan.
+2. Prepare short RO/RU/EN and genuinely mixed clips from permitted sources; get fluent human reference checks. Mark unavailable language checking as unverified.
+3. Write expected actions for a rejected proposal, a confirmed owner/date amendment, missing owner and uncertain number. Keep tuning and held-out cases separate.
+4. Prepare a real one-hour test, with late changes; do not repeat one short English clip to claim meeting quality.
+5. Track PBI evidence and capture genuine failures. Do not merge code or approve legal conclusions as a substitute for qualified review.
+6. Draft slides now; rehearse as soon as the first full flow works. Reserve the final hours for timing, Q&A and a labeled backup demo.
 
-**Dev B — H01/H04/H06:** read [current app](01-current-app.md) and [contracts](02-target-architecture.md). Add browser-safe meeting flow in the existing Svelte project. Use one clearly labeled development fixture until A's service works. Implement deterministic minutes and local configured SMTP delivery; test real receipt and failure/retry. Mock UI success is not completion.
+## Five-slide pitch
 
-**Dev B with A — H12, required after first integrated upload flow:** B owns microphone UI, sequenced chunk persistence and Stop/seal handling; A owns incremental ASR and final reconciliation. Agree recording state and timestamp mapping before parallel edits. This is P0, not a stretch feature. If capacity is tight, remove all P1/P2 work before cutting either required input mode.
+1. Confidential multilingual hospital meetings and the risk of losing final decisions.
+2. Upload/live -> source transcript -> grounded decisions -> final document -> Affan's demonstrated delivery.
+3. Show one measured differentiator: inspectable evidence, correct final amendments, or useful focused review.
+4. Proof: actual hardware/config, sample count, errors, one-hour timing and offline run. Label untested profiles.
+5. Limits and next steps: patient privacy, human oversight and real-pilot qualification.
 
-**Dev A+B — H16 then H17:** read [transcript review](07-transcript-review.md). A owns versioned spans/edits, LLM candidates and downstream invalidation; B owns manual editing, find-like navigation, select/apply/undo and one reusable audio drawer. CEO labels true/false flags and times review. H17 gets an H32–H36 timebox after P0; keep manual editing and cut unreliable suggestions if the experiment fails.
+Only show completed features as working. A patient dashboard supports the workflow; it does not establish clinical validation or GDPR compliance. State whether names are manually mapped, anonymous speaker labels or qualified voice recognition.
 
-**CEO — evaluation/pitch:** read [start here](README.md), [speakers](04-speakers.md), and [acceptance](05-build-plan.md). Prepare reference decisions, find fluent reviewers, run the checklist with developer guidance, and record concrete failures. Do not tune models or merge source changes. Aim for a usable slide outline by H20 and first spoken rehearsal by H28.
+## Coordination
 
-## Coordination rules
-
-- Separate task branches/worktrees; small integration commits. No simultaneous edits to shared schema, lockfiles, or app startup without coordination.
-- At H2 freeze representative meeting/transcript/action/error JSON; keep it versioned so each AI has the same contract.
-- Integrate at least every four elapsed hours. No separate frontend/backend “finished” claims before the whole new-audio flow runs.
-- Each handoff includes commit, task ID, changed paths, commands actually run, current artifact location, and next failing gate.
-- Track status using **Done / Changed / Next / Risks**. Every claimed acceptance result links to a log/output; planning checkboxes stay open until measured.
-- No optional work while a P0 gate is red. Each optional experiment has a time cap and a clear removal path.
-- Before changing a contract, tell the other owner; after changing it, update fixtures and this pack's affected contract description.
-
-## CEO checklist and pitch
-
-Organizer clarification, early: n8n implementation expectation; required submission format/deadline; demo length; whether audio may be bundled/shared; any supplied distribution-list conventions. These questions need not block the simple local implementation.
-
-Suggested five-slide outline:
-
-1. Problem: confidential hospital meetings mix Romanian, Russian, and English; decisions change during discussion.
-2. Product: upload/record -> original transcript -> decisions/owners/deadlines -> internal email.
-3. Technical advantage: final confirmed commitment survives corrections; source evidence is inspectable; targeted term review fixes consequential errors with few actions. Show only features actually qualified.
-4. Proof: actual hardware, dataset size, accuracy/error counts, one-hour timing, offline run. Mark untested 16 GB deployment as untested.
-5. Demo + next steps: local mail receipt, limitations, hospital pilot requirements.
-
-Rehearse against the organizer's actual time limit. Use a short meeting with a rejected proposal, owner/date correction, mixed-language term, and unresolved number. Prepare a new paraphrase so the result demonstrates generalization beyond memorized wording. Have a labeled prerecorded fallback and known-good release. A polished failure explanation is preferable to fake output.
-
-Likely questions: “What happens with a missing owner?”, “How do you handle Russian mid-sentence?”, “Does it work without internet after restart?”, “Which hardware produced this timing?”, “Was that speaker identified or manually named?”, “Can the audio trick it into sending mail elsewhere?” Each answer should point to a tested behavior or an explicit limitation.
+- Small integration commits; avoid concurrent changes to shared startup/schema/lockfiles.
+- Each handoff includes PBI ID, commit, changed paths, actual checks and next failing gate.
+- Share file-contract changes with Affan before integration; leave mailing internals to him.
+- Status headings: **Done / Changed / Next / Risks**.
+- P0 remains ahead of all extras. Move accepted PBIs into `pbis/completed/` and update the index links.
