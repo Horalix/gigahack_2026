@@ -1,0 +1,35 @@
+{
+  "profile_id": "cpu",
+  "description": "CPU-only functional fallback. Throughput is unqualified.",
+  "hardware": {"gpu": null, "vram_gb": 0, "system_ram_gb": null, "tested": false},
+  "limits": {
+    "max_vram_gb": 0,
+    "max_system_ram_gb": null,
+    "max_asr_batch_size": 1,
+    "max_asr_beam_size": 10,
+    "max_llm_context_size": 4096,
+    "max_llm_output_tokens": 1024,
+    "allowed_asr_models": ["whisper-large-v3-local"],
+    "allowed_llm_models": ["qwen35-4b-q4km-local"]
+  },
+  "asr": {
+    "model_alias": "whisper-large-v3-local",
+    "backend": "faster_whisper",
+    "compute_type": "int8",
+    "batch_size": 1,
+    "beam_size": 5,
+    "word_timestamps": true,
+    "device": "cpu",
+    "cpu_threads": 4
+  },
+  "llm": {
+    "model_alias": "qwen35-4b-q4km-local",
+    "backend": "llama_cpp",
+    "context_size": 4096,
+    "max_output_tokens": 1024,
+    "chat_template": "embedded",
+    "gpu_layers": 0,
+    "cpu_threads": 4
+  },
+  "scheduling": {"asr_before_llm": true, "max_concurrent_gpu_jobs": 1}
+}

@@ -1,0 +1,38 @@
+{
+  "profile_id": "laptop8",
+  "description": "RTX 3070 Ti Mobile, 8 GB VRAM, 24 GB system RAM (reported; runtime capability still needs querying).",
+  "hardware": {
+    "gpu": "NVIDIA RTX 3070 Ti Mobile",
+    "vram_gb": 8,
+    "system_ram_gb": 24,
+    "tested": false
+  },
+  "limits": {
+    "max_vram_gb": 8,
+    "max_system_ram_gb": 24,
+    "max_asr_batch_size": 8,
+    "max_asr_beam_size": 10,
+    "max_llm_context_size": 8192,
+    "max_llm_output_tokens": 2048,
+    "allowed_asr_models": ["whisper-large-v3-local"],
+    "allowed_llm_models": ["qwen35-4b-q4km-local"]
+  },
+  "asr": {
+    "model_alias": "whisper-large-v3-local",
+    "backend": "faster_whisper",
+    "compute_type": "int8_float16",
+    "batch_size": 1,
+    "beam_size": 5,
+    "word_timestamps": true,
+    "device": "cuda"
+  },
+  "llm": {
+    "model_alias": "qwen35-4b-q4km-local",
+    "backend": "llama_cpp",
+    "context_size": 8192,
+    "max_output_tokens": 2048,
+    "chat_template": "embedded",
+    "gpu_layers": -1
+  },
+  "scheduling": {"asr_before_llm": true, "max_concurrent_gpu_jobs": 1}
+}

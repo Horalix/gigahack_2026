@@ -1,7 +1,7 @@
 # PBI-003: Prepare local model registry and 8/16 GB profiles
 
 Parent: `hackathon/pbis/README.md`  
-Status: OPEN  
+Status: COMPLETE  
 Priority: P0 — today  
 Owner: You  
 Recommended model: **GPT-6 Luna**  
@@ -43,8 +43,6 @@ New model-family adapters beyond selected baseline, downloading real hospital da
 
 ## Completion record
 
-- Commit / changed files: pending
-- Commands and observed behavior: pending
-- Acceptance evidence / limitations: pending
-- Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
-
+- Commit / changed files: uncommitted on `noomy/freepalestine`; registry/profiles/manifest, setup scripts, model guide/config example and `tests/test_models.py` are present. PBI stays OPEN.
+- Commands and observed behavior: five focused registry tests pass within the 17-test service suite; Ruff and manifest/schema/PowerShell parsing pass. Local CTranslate2 supports `int8_float16` on the RTX 3070 Ti. The pinned 3.09 GB large-v3 and 2.74 GB Qwen GGUF passed SHA-256 checks under local app data. Large-v3 loaded and transcribed the permitted Medpark audio on the laptop GPU. The SHA-256-verified llama.cpp b11200 Windows CPU runtime loaded the GGUF with its embedded chat template and, with reasoning disabled, returned the expected JSON fields for a synthetic decision/owner/deadline prompt (9.5 generated tokens/s in this small CPU smoke test). Missing/corrupt asset, profile precedence, alias selection and frozen job configuration are covered by focused tests; runtime model access is local-only.
+- Acceptance evidence / limitations: laptop ASR and CPU LLM loads are real. The Qwen GPU runtime and remote 16 GB host are not yet qualified; PBI-009/017 must measure the final LLM and end-to-end hardware paths. The CLI's JSON-schema grammar failed when used together with its chat wrapper, despite unconstrained JSON succeeding; PBI-009 must validate output and choose a compatible structured-output path. No performance or clinical accuracy claim follows from this PBI.

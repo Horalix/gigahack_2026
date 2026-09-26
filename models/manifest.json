@@ -1,0 +1,39 @@
+{
+  "manifest_version": 1,
+  "model_root_env": "MOM_MODEL_ROOT",
+  "models": {
+    "whisper-large-v3-local": {
+      "task": "asr",
+      "backend": "faster_whisper",
+      "path": "asr/whisper-large-v3",
+      "upstream": "Systran/faster-whisper-large-v3",
+      "revision": "edaa852ec7e145841d8ffdb056a99866b5f0a478",
+      "license": "MIT",
+      "quantization": "float16 weights; runtime compute precision selected per profile",
+      "artifacts": [
+        {"path": "model.bin", "sha256": "69f74147e3334731bc3a76048724833325d2ec74642fb52620eda87352e3d4f1", "size_bytes": 3087284237},
+        {"path": "config.json", "sha256": "a9306624f5ec14270a014b647e5c316b6e03a662c369758d1b90697a7b0655b9", "size_bytes": 2394},
+        {"path": "preprocessor_config.json", "sha256": "7ccc62c6f2765af1f3b46c00c9b5894426835a05021c8b9c01eecb6dfb542711", "size_bytes": 340},
+        {"path": "tokenizer.json", "sha256": "6d8cbd7cd0d8d5815e478dac67b85a26bbe77c1f5e0c6d76d1ce2abc0e5f21ca", "size_bytes": 2480617},
+        {"path": "vocabulary.json", "sha256": "c69260f2ab26d659b7c398f9a2b2b48ed0df16c3b47d7326782fd9cba71690c1", "size_bytes": 1068114}
+      ],
+      "capabilities": {"languages": ["ro", "ru", "en"], "task": "transcription", "word_timestamps": true},
+      "devices": ["cuda", "cpu"],
+      "status": "candidate_not_runtime_qualified"
+    },
+    "qwen35-4b-q4km-local": {
+      "task": "llm",
+      "backend": "llama_cpp",
+      "path": "llm/Qwen3.5-4B-Q4_K_M.gguf",
+      "upstream": "unsloth/Qwen3.5-4B-GGUF",
+      "revision": "e87f176479d0855a907a41277aca2f8ee7a09523",
+      "artifact": {"path": "Qwen3.5-4B-Q4_K_M.gguf", "sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4", "size_bytes": 2740937888},
+      "license": "Apache-2.0",
+      "quantization": "Q4_K_M",
+      "capabilities": {"languages": ["ro", "ru", "en"], "task": "text_generation", "structured_output": "requires runtime verification"},
+      "devices": ["cuda", "cpu"],
+      "runtime_requirement": "llama.cpp with Qwen3.5 GGUF support; pin/version and chat-template behavior require local verification",
+      "status": "candidate_not_runtime_qualified"
+    }
+  }
+}

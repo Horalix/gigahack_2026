@@ -17,6 +17,9 @@
 
 ## Changed
 
+- Hackathon PBI-002 now has a separate FastAPI/SQLite service: generated-name WAV/video ingest, FFmpeg track selection, source preservation, transactional single-GPU job claims, expired-lease recovery, checkpointed transcript commits and deny-by-default synthetic-only access hook. Real synthetic English speech reached `transcript_ready` after a simulated worker expiry on the RTX 3070 Ti; this does not verify multilingual large-v3 accuracy.
+- Hackathon PBI-003 is complete: pinned large-v3 and Qwen GGUF passed local SHA-256 checks; large-v3 ran on the 8 GB laptop GPU and Qwen loaded with its embedded template on a local CPU runtime. PBI-004 remains open: the permitted 11m42s Medpark recording produced timed words in 101.5 seconds of ASR work, but a composite exposed language/script instability and overlap lost one voice. The remote 16 GB host and one-hour end-to-end path are untested. See `hackathon/10-team-handoff.md` for current team ownership and evidence.
+- Completed hackathon PBI-001 on the current `noomy/freepalestine` checkout: added versioned Secure MOM record schemas, synthetic contract/output fixtures and documented semantic validation plus Affan's still-pending artifact format/handoff decision. This is additive planning/integration scaffolding; it does not change or complete the caption app.
 - Native checks fixed four defects: overbroad source filtering, a borrowed PROPVARIANT destructor causing heap corruption, stale/empty caption rendering crashing the overlay, and missing titlebar-dragging permission.
 - Removed repeated randomized decoding retries for short live chunks. A recognition-state reuse experiment was discarded because its timing benefit was not clear. Native timing remains fixture-specific; broader latency and accuracy evaluation is still needed.
 - Latest additions include model-download progress, playback-device-change handling, recognition-error propagation, startup race guards, export-folder access, writer-overload persistence, and repeated prerecorded segment checks.
@@ -25,6 +28,7 @@
 
 ## Next
 
+- Qualify PBI-004 against known-language references and review the code-switch window choice; then finish PBI-005 access and PBI-009 grounded decisions while Affan builds the PBI-010 artifact renderer.
 - Complete the remaining controlled checks in `installer-smoke-test.md`: native mouse/menu interaction, mixed-DPI/fullscreen behavior, live microphone, clean-machine installation, and broader speech accuracy/latency.
 
 ## Risks

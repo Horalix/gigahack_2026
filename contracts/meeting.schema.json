@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gigahack.local/contracts/meeting-v1.schema.json",
+  "title": "Secure MOM contract fixture v1",
+  "description": "Versioned local contract examples and reusable record definitions. Cross-record references require semantic validation by the service.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "organization", "patient", "meeting", "asset", "segments", "action", "job", "reviewIssue", "artifact", "error"],
+  "properties": {
+    "contractVersion": { "const": "1.0" },
+    "organization": { "$ref": "#/$defs/organization" },
+    "patient": { "$ref": "#/$defs/patient" },
+    "patientLink": { "$ref": "#/$defs/patientLink" },
+    "meeting": { "$ref": "#/$defs/meeting" },
+    "asset": { "$ref": "#/$defs/asset" },
+    "segments": { "type": "array", "items": { "$ref": "#/$defs/segment" } },
+    "action": { "$ref": "#/$defs/action" },
+    "job": { "$ref": "#/$defs/job" },
+    "reviewIssue": { "$ref": "#/$defs/reviewIssue" },
+    "transcriptEdit": { "$ref": "#/$defs/transcriptEdit" },
+    "artifact": { "$ref": "#/$defs/artifact" },
+    "error": { "$ref": "#/$defs/error" }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "instant": { "type": "string", "format": "date-time" },
+    "organization": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id"],
+      "properties": { "id": { "$ref": "#/$defs/id" } }
+    },
+    "patient": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "organizationId", "displayName", "status", "createdAt", "updatedAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "organizationId": { "$ref": "#/$defs/id" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "reference": { "type": ["string", "null"], "maxLength": 128 },
+        "status": { "enum": ["active", "archived"] },
+        "createdAt": { "$ref": "#/$defs/instant" }, "updatedAt": { "$ref": "#/$defs/instant" }
+      }
+    },
+    "patientLink": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "organizationId", "patientId", "meetingId", "linkedBy", "linkedAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "organizationId": { "$ref": "#/$defs/id" },
+        "patientId": { "$ref": "#/$defs/id" }, "meetingId": { "$ref": "#/$defs/id" },
+        "linkedBy": { "$ref": "#/$defs/id" }, "linkedAt": { "$ref": "#/$defs/instant" }
+      }
+    },
+    "meeting": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "organizationId", "title", "recordedAt", "timeZone", "outputLanguage", "patientLinkIds", "participantIds", "status", "transcriptRevision", "createdAt", "updatedAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "organizationId": { "$ref": "#/$defs/id" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "recordedAt": { "$ref": "#/$defs/instant" }, "timeZone": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "meetingType": { "type": ["string", "null"], "maxLength": 80 },
+        "suggestedMeetingType": { "type": ["string", "null"], "maxLength": 80 },
+        "outputLanguage": { "enum": ["ro", "ru", "en"] },
+        "patientLinkIds": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "participantIds": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "status": { "enum": ["draft", "processing", "transcript_ready", "needs_review", "ready", "failed", "archived"] },
+        "transcriptRevision": { "type": "integer", "minimum": 0 },
+        "createdAt": { "$ref": "#/$defs/instant" }, "updatedAt": { "$ref": "#/$defs/instant" }
+      }
+    },
+    "asset": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "organizationId", "meetingId", "kind", "storageKey", "sha256", "durationMs", "sizeBytes", "mediaType", "createdAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "organizationId": { "$ref": "#/$defs/id" }, "meetingId": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["audio", "video"] }, "storageKey": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "sha256": { "$ref": "#/$defs/sha256" }, "durationMs": { "type": "integer", "minimum": 0 },
+        "sizeBytes": { "type": "integer", "minimum": 0 }, "mediaType": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "channels": { "type": ["integer", "null"], "minimum": 1 }, "sampleRateHz": { "type": ["integer", "null"], "minimum": 1 },
+        "audioTrackIndex": { "type": "integer", "minimum": 0 }, "sourceOffsetMs": { "type": "integer", "minimum": 0 },
+        "decodeWarning": { "type": ["string", "null"], "maxLength": 256 },
+        "createdAt": { "$ref": "#/$defs/instant" }
+      }
+    },
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["segmentId", "transcriptRevision", "quote", "startMs", "endMs"],
+      "properties": {
+        "segmentId": { "$ref": "#/$defs/id" }, "transcriptRevision": { "type": "integer", "minimum": 0 },
+        "quote": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "startMs": { "type": "integer", "minimum": 0 }, "endMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "segment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "organizationId", "meetingId", "assetId", "transcriptRevision", "startMs", "endMs", "text", "language", "origin"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "organizationId": { "$ref": "#/$defs/id" }, "meetingId": { "$ref": "#/$defs/id" },
+        "assetId": { "$ref": "#/$defs/id" }, "transcriptRevision": { "type": "integer", "minimum": 0 },
+        "startMs": { "type": "integer", "minimum": 0 }, "endMs": { "type": "integer", "minimum": 0 },
+        "text": { "type": "string", "maxLength": 10000 },
+        "language": { "enum": ["ro", "ru", "en", "und", "mul"] },
+        "speakerClusterId": { "type": ["string", "null"], "maxLength": 128 },
+        "origin": { "enum": ["asr", "human_edit"] },
+        "words": { "type": "array", "items": { "$ref": "#/$defs/word" } }
+      }
+    },
+    "word": {
+      "type": "object", "additionalProperties": false,
+      "required": ["startMs", "endMs", "text"],
+      "properties": {
+        "startMs": { "type": "integer", "minimum": 0 }, "endMs": { "type": "integer", "minimum": 0 },
+        "text": { "type": "string" }, "probability": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+      }
+    },
+    "action": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "organizationId", "meetingId", "revision", "text", "ownerParticipantId", "dueAt", "originalDateExpression", "status", "taskEvidence", "ownerEvidence", "dateEvidence"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "organizationId": { "$ref": "#/$defs/id" }, "meetingId": { "$ref": "#/$defs/id" },
+        "revision": { "type": "integer", "minimum": 0 }, "text": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "ownerParticipantId": { "type": ["string", "null"], "maxLength": 128 }, "dueAt": { "type": ["string", "null"], "format": "date-time" },
+        "originalDateExpression": { "type": ["string", "null"], "maxLength": 240 },
+        "status": { "enum": ["proposed", "confirmed", "rejected", "cancelled", "unresolved"] },
+        "taskEvidence": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evidence" } },
+        "ownerEvidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } },
+        "dateEvidence": { "type": "array", "items": { "$ref": "#/$defs/evidence" } }
+      }
+    },
+    "job": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "organizationId", "meetingId", "state", "stage", "profileId", "modelConfig", "createdAt", "updatedAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "organizationId": { "$ref": "#/$defs/id" }, "meetingId": { "$ref": "#/$defs/id" },
+        "state": { "enum": ["queued", "running", "needs_review", "ready", "failed", "cancelled"] },
+        "stage": { "enum": ["decode", "transcribe", "extract", "validate", "render", "complete"] },
+        "profileId": { "$ref": "#/$defs/id" }, "modelConfig": { "type": "object" },
+        "errorCode": { "type": ["string", "null"], "maxLength": 128 },
+        "progressMs": { "type": "integer", "minimum": 0 }, "attempts": { "type": "integer", "minimum": 0 },
+        "createdAt": { "$ref": "#/$defs/instant" }, "updatedAt": { "$ref": "#/$defs/instant" },
+        "artifactIds": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/id" } }
+      }
+    },
+    "reviewIssue": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "organizationId", "meetingId", "segmentId", "transcriptRevision", "startOffset", "endOffset", "originalText", "reason", "suggestions", "status"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "organizationId": { "$ref": "#/$defs/id" }, "meetingId": { "$ref": "#/$defs/id" },
+        "segmentId": { "$ref": "#/$defs/id" }, "transcriptRevision": { "type": "integer", "minimum": 0 },
+        "startOffset": { "type": "integer", "minimum": 0 }, "endOffset": { "type": "integer", "minimum": 0 },
+        "originalText": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "suggestions": { "type": "array", "maxItems": 5, "items": { "type": "string", "minLength": 1, "maxLength": 500 } },
+        "status": { "enum": ["open", "accepted", "kept", "deferred", "superseded"] }
+      }
+    },
+    "transcriptEdit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "batchId", "meetingId", "actorId", "baseRevision", "newRevision", "segmentId", "startOffset", "endOffset", "originalText", "replacementText", "createdAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "batchId": { "$ref": "#/$defs/id" }, "meetingId": { "$ref": "#/$defs/id" },
+        "actorId": { "$ref": "#/$defs/id" }, "baseRevision": { "type": "integer", "minimum": 0 }, "newRevision": { "type": "integer", "minimum": 1 },
+        "segmentId": { "$ref": "#/$defs/id" }, "startOffset": { "type": "integer", "minimum": 0 }, "endOffset": { "type": "integer", "minimum": 0 },
+        "originalText": { "type": "string", "maxLength": 2000 }, "replacementText": { "type": "string", "maxLength": 2000 },
+        "createdAt": { "$ref": "#/$defs/instant" }
+      }
+    },
+    "artifact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "organizationId", "meetingId", "snapshotRevision", "mediaType", "sha256", "status", "createdAt"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" }, "organizationId": { "$ref": "#/$defs/id" }, "meetingId": { "$ref": "#/$defs/id" },
+        "snapshotRevision": { "type": "integer", "minimum": 0 }, "storageKey": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "mediaType": { "enum": ["text/html", "text/plain", "application/pdf"] }, "sha256": { "$ref": "#/$defs/sha256" },
+        "status": { "enum": ["draft", "ready", "superseded", "revoked"] }, "createdAt": { "$ref": "#/$defs/instant" }
+      }
+    },
+    "error": {
+      "type": "object", "additionalProperties": false,
+      "required": ["code", "message", "retryable", "requestId"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,63}$" },
+        "message": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "retryable": { "type": "boolean" }, "requestId": { "$ref": "#/$defs/id" },
+        "details": { "type": "object", "additionalProperties": { "type": ["string", "number", "integer", "boolean", "null"] } }
+      }
+    }
+  }
+}

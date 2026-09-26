@@ -1,0 +1,159 @@
+{
+  "contractVersion": "1.0",
+  "organization": { "id": "org-demo" },
+  "patient": {
+    "id": "patient-demo-001",
+    "organizationId": "org-demo",
+    "displayName": "Synthetic Patient",
+    "reference": null,
+    "status": "active",
+    "createdAt": "2026-09-26T09:00:00Z",
+    "updatedAt": "2026-09-26T09:00:00Z"
+  },
+  "patientLink": {
+    "id": "patient-link-demo-001",
+    "organizationId": "org-demo",
+    "patientId": "patient-demo-001",
+    "meetingId": "meeting-demo-001",
+    "linkedBy": "user-demo-001",
+    "linkedAt": "2026-09-26T09:01:00Z"
+  },
+  "meeting": {
+    "id": "meeting-demo-001",
+    "organizationId": "org-demo",
+    "title": "Synthetic multidisciplinary meeting",
+    "recordedAt": "2026-09-26T09:00:00Z",
+    "timeZone": "Europe/Chisinau",
+    "meetingType": "care-coordination",
+    "suggestedMeetingType": null,
+    "outputLanguage": "en",
+    "patientLinkIds": ["patient-link-demo-001"],
+    "participantIds": ["participant-demo-001", "participant-demo-002"],
+    "status": "ready",
+    "transcriptRevision": 1,
+    "createdAt": "2026-09-26T09:00:00Z",
+    "updatedAt": "2026-09-26T09:05:00Z"
+  },
+  "asset": {
+    "id": "asset-demo-001",
+    "organizationId": "org-demo",
+    "meetingId": "meeting-demo-001",
+    "kind": "audio",
+    "storageKey": "org-demo/meeting-demo-001/source-demo.wav",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "durationMs": 12400,
+    "sizeBytes": 128000,
+    "mediaType": "audio/wav",
+    "channels": 1,
+    "sampleRateHz": 16000,
+    "createdAt": "2026-09-26T09:00:00Z"
+  },
+  "segments": [
+    {
+      "id": "segment-demo-001",
+      "organizationId": "org-demo",
+      "meetingId": "meeting-demo-001",
+      "assetId": "asset-demo-001",
+      "transcriptRevision": 1,
+      "startMs": 0,
+      "endMs": 6200,
+      "text": "The synthetic follow-up is planned for Monday.",
+      "language": "en",
+      "speakerClusterId": null,
+      "origin": "asr"
+    },
+    {
+      "id": "segment-demo-002",
+      "organizationId": "org-demo",
+      "meetingId": "meeting-demo-001",
+      "assetId": "asset-demo-001",
+      "transcriptRevision": 1,
+      "startMs": 6200,
+      "endMs": 12400,
+      "text": "We will confirm the owner after the discussion.",
+      "language": "en",
+      "speakerClusterId": null,
+      "origin": "asr"
+    }
+  ],
+  "action": {
+    "id": "action-demo-001",
+    "organizationId": "org-demo",
+    "meetingId": "meeting-demo-001",
+    "revision": 1,
+    "text": "Confirm the follow-up plan with the care team.",
+    "ownerParticipantId": null,
+    "dueAt": null,
+    "originalDateExpression": "Monday",
+    "status": "unresolved",
+    "taskEvidence": [
+      { "segmentId": "segment-demo-001", "transcriptRevision": 1, "quote": "The synthetic follow-up is planned for Monday.", "startMs": 0, "endMs": 6200 }
+    ],
+    "ownerEvidence": [],
+    "dateEvidence": [
+      { "segmentId": "segment-demo-001", "transcriptRevision": 1, "quote": "Monday", "startMs": 0, "endMs": 6200 }
+    ]
+  },
+  "job": {
+    "id": "job-demo-001",
+    "organizationId": "org-demo",
+    "meetingId": "meeting-demo-001",
+    "state": "ready",
+    "stage": "complete",
+    "profileId": "laptop8",
+    "modelConfig": {
+      "asr": "fixture-asr",
+      "llm": "fixture-llm",
+      "computeType": "fixture"
+    },
+    "errorCode": null,
+    "createdAt": "2026-09-26T09:00:01Z",
+    "updatedAt": "2026-09-26T09:05:00Z",
+    "artifactIds": ["artifact-demo-001"]
+  },
+  "reviewIssue": {
+    "id": "review-demo-001",
+    "organizationId": "org-demo",
+    "meetingId": "meeting-demo-001",
+    "segmentId": "segment-demo-001",
+    "transcriptRevision": 1,
+    "startOffset": 0,
+    "endOffset": 6,
+    "originalText": "The sy",
+    "reason": "Synthetic open issue to demonstrate a bounded review span.",
+    "suggestions": [],
+    "status": "open"
+  },
+  "transcriptEdit": {
+    "id": "edit-demo-001",
+    "batchId": "edit-batch-demo-001",
+    "meetingId": "meeting-demo-001",
+    "actorId": "user-demo-001",
+    "baseRevision": 0,
+    "newRevision": 1,
+    "segmentId": "segment-demo-001",
+    "startOffset": 0,
+    "endOffset": 6,
+    "originalText": "The sy",
+    "replacementText": "The synthetic",
+    "createdAt": "2026-09-26T09:04:00Z"
+  },
+  "artifact": {
+    "id": "artifact-demo-001",
+    "organizationId": "org-demo",
+    "meetingId": "meeting-demo-001",
+    "snapshotRevision": 1,
+    "storageKey": "org-demo/meeting-demo-001/artifact-demo-001.html",
+    "mediaType": "text/html",
+    "sha256": "4304dbf9749f6adba7bed42a904a38e79e719625a1c95a0fda9c594f64255275",
+    "status": "ready",
+    "createdAt": "2026-09-26T09:05:00Z"
+  },
+  "error": {
+    "code": "MODEL_NOT_READY",
+    "message": "The selected local model is not installed.",
+    "retryable": false,
+    "requestId": "request-demo-001",
+    "details": { "profileId": "laptop8" }
+  }
+}

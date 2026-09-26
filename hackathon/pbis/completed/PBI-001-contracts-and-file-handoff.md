@@ -1,7 +1,7 @@
 # PBI-001: Freeze app contracts and Affan's output-file boundary
 
 Parent: `hackathon/pbis/README.md`  
-Status: OPEN  
+Status: COMPLETE  
 Priority: P0 — today  
 Owner: You; Affan confirms only the artifact interface  
 Recommended model: **GPT-6 Luna**  
@@ -44,8 +44,6 @@ Mail implementation, database implementation, clinical orders, elaborate schema 
 
 ## Completion record
 
-- Commit / changed files: pending
-- Commands and observed behavior: pending
-- Acceptance evidence / limitations: pending
-- Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
-
+- Commit / changed files: uncommitted additions in the current `noomy/freepalestine` checkout: `contracts/meeting.schema.json`, `contracts/README.md`, and two fixtures.
+- Commands and observed behavior: Python `jsonschema` Draft 2020-12 schema check passed; the valid fixture passed; invalid enum and digest were rejected; semantic checks rejected a dangling evidence reference and verified patient/meeting linkage, evidence revision, timing and quote, and asset ownership. Fixture artifact digest matched exact HTML bytes; HTML has no remote assets.
+- Acceptance evidence / limitations: Contract is additive. HTML and the ready-artifact interface remain provisional because Affan has not confirmed format or trigger. Cross-record authorization, source-bound and stale-revision checks are documented for service implementation; JSON Schema cannot enforce them. No app/API was implemented by this PBI.

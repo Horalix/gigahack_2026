@@ -1,8 +1,8 @@
 # Secure MOM execution backlog
 
-**26 September 2026 · finish today's demo today · inspected develop: eb4d808.**
+**26 September 2026; finish today; current implementation checkout: `noomy/freepalestine` (uncommitted).**
 
-This index supersedes the older H01–H17 task order and 48-hour staffing assumptions. All PBIs are OPEN: the inspected branch has the caption app and docs, with no new meeting service/patient dashboard. Affan's private branch may contain separate work; do not overwrite it.
+This index supersedes the older task order. PBIs 001, 002 and 003 are complete; 004 remains OPEN for accuracy qualification. [The live team handoff](../10-team-handoff.md) governs current evidence, epic ownership and branch boundaries, superseding old Owner labels in individual PBIs. Affan finished SMTP on his separate branch; integration has not been verified.
 
 ## Scope and authority
 
@@ -14,11 +14,9 @@ P0 = required today, including user-added patients/live/editing and CEO presenta
 
 ## Start now
 
-1. **Luna: PBI-001** freezes contracts and file fixture. In parallel work outside shared files, prepare **PBI-003** model assets/hardware checks. No model execution agents were spawned while authoring this plan.
-2. **Sol: PBI-002**, then **PBI-004** gets a real file transcribed on the 3070 Ti. This is the first technical gate, before broad UI polishing.
-3. **Luna: PBI-007/008** can develop against PBI-001 fixtures while the service is built. Complete acceptance only against real endpoints. **Sol: PBI-005** protects all real endpoints; synthetic development mode is not a production bypass.
-4. **Sol: PBI-009**, then **Luna: PBI-010** delivers the first real output file to Affan. Integrate early rather than waiting for optional features.
-5. Complete remaining P0, run PBI-017, freeze. CEO works on PBI-024 throughout.
+1. **You:** finish PBI-004 code-switch and accuracy qualification, then PBI-005 access and PBI-009 local decisions.
+2. **Affan:** PBI-010 fixture renderer and file handoff on his branch, then PBI-007 dashboard. PBI-006 patient module can be prepared against fixtures; integration waits for PBI-005.
+3. **CEO:** PBI-024 pitch and permitted evaluation references now. The final performance and delivery claims wait for PBI-017 and Affan's integrated SMTP path.
 
 ## Model budget rules
 
@@ -27,28 +25,17 @@ P0 = required today, including user-added patients/live/editing and CEO presenta
 - **GPT-6 Astra plans only by default.** No PBI is assigned to Astra implementation. Escalate only an isolated unresolved issue after Sol has produced concrete evidence that deeper analysis is needed, and let the user choose whether to spend the extra credits. Do not send the whole app to Astra for convenience.
 - One task at a time per working tree. Separate sessions/worktrees may handle independent tasks with explicit file ownership; never run competing schema/lockfile edits. These are execution recommendations, not permission to start hidden agent work.
 
-## Today: realistic checkpoints
+## Today's gates
 
-Planning written around 13:30 Europe/Warsaw; adjust against actual remaining time. These are stop/checkpoints, not guaranteed engineering estimates. With Affan focused on mail, app work is primarily **one developer plus AI**, not two full app developers. There is substantial new code; do not claim the entire roadmap can certainly finish today.
-
-| Local checkpoint | Required visible evidence | Action if behind |
-|---|---|---|
-| 15:00 | Real short audio -> timed local transcript; contracts agreed | Solve runtime/model issue with Sol; defer UI polish |
-| 17:00 | New short audio -> structured final file; Affan can consume it | Focus on extraction/artifact integration; no extras |
-| 19:00 | Dashboard/patient search/pages, upload and live flow integrated; access boundaries working | Finish missing P0, explicitly record risk to today's full scope |
-| 21:00 | Manual corrections/privacy checks and first hour benchmark complete | Freeze optional work; fix largest gate failure |
-| 22:00 | Release candidate, repeat offline test; CEO rehearsal | Only targeted regression fixes |
-| By local end of day | Qualified runnable demo and honest completion record | Leave unmet PBIs OPEN; never redefine a missing requirement as done |
-
-If the required scope does not fit, surface which P0 gates are still missing immediately. Keep working on required behavior; user decides any scope reduction. All future PBIs remain documented for handoff.
+Use [the live handoff](../10-team-handoff.md) for the current parallel order. A local model run, fixture renderer or SMTP unit test is not an end-to-end pass. Complete the P0 acceptance gates, measure the one-hour offline path with Affan, and leave any unmet PBI OPEN.
 
 ## Task index
 
 | PBI | Priority | Executor / reasoning | Dependencies | Status |
 |---|---|---|---|---|
-| [001 — Freeze app contracts and Affan's output-file boundary](PBI-001-contracts-and-file-handoff.md) | P0 | Luna / Medium | None | OPEN |
-| [002 — Create local API, storage and restartable jobs](PBI-002-local-service-and-durable-jobs.md) | P0 | Sol / High | 001 | OPEN |
-| [003 — Prepare local model registry and 8/16 GB profiles](PBI-003-model-registry-and-hardware-profiles.md) | P0 | Luna / High | 001 | OPEN |
+| [001 — Freeze app contracts and Affan's output-file boundary](completed/PBI-001-contracts-and-file-handoff.md) | P0 | Luna / Medium | None | COMPLETE |
+| [002 — Create local API, storage and restartable jobs](completed/PBI-002-local-service-and-durable-jobs.md) | P0 | Sol / High | 001 | COMPLETE |
+| [003 — Prepare local model registry and 8/16 GB profiles](completed/PBI-003-model-registry-and-hardware-profiles.md) | P0 | Luna / High | 001 | COMPLETE |
 | [004 — Transcribe real audio on the laptop GPU](PBI-004-gpu-transcription.md) | P0 | Sol / High | 002, 003 | OPEN |
 | [005 — Protect patients, meetings and source media](PBI-005-local-access-and-object-isolation.md) | P0 | Sol / High | 001, 002 | OPEN |
 | [006 — Create a minimal searchable patient directory](PBI-006-patients-api-and-pagination.md) | P0 | Luna / High | 001, 002, 005 | OPEN |
@@ -105,8 +92,8 @@ The graph is a summary; each PBI's dependency list governs. PBI-022 evidence inv
 
 ## Ownership and integration
 
-- You own the core app, contracts, service, UI and patient data controls. Assign individual bounded tasks to Luna/Sol as above.
-- Affan owns sending the file. Do not edit his modules, select his mail architecture or create substitute delivery code. Coordinate the file boundary only.
+- Current developer ownership is in [the live handoff](../10-team-handoff.md); it supersedes old Owner labels in individual PBI files.
+- Affan owns his SMTP code plus the assigned product/delivery PBIs. Coordinate the artifact interface; do not duplicate his mail implementation.
 - CEO collects permitted/synthetic test material and human references, updates acceptance evidence, checks organizer details, writes pitch and rehearses. CEO/DPO/hospital IT own policy approvals where engineering cannot decide.
 - Contracts/migrations/lockfiles have one owner per session. Other tasks consume frozen fixtures. Integrate through small commits and note interface changes before another branch consumes them.
 

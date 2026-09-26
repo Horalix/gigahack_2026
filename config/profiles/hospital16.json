@@ -1,0 +1,38 @@
+{
+  "profile_id": "hospital16",
+  "description": "Remote RTX 5080, 16 GB VRAM; system RAM is unknown. Not yet tested.",
+  "hardware": {
+    "gpu": "NVIDIA RTX 5080",
+    "vram_gb": 16,
+    "system_ram_gb": null,
+    "tested": false
+  },
+  "limits": {
+    "max_vram_gb": 16,
+    "max_system_ram_gb": null,
+    "max_asr_batch_size": 8,
+    "max_asr_beam_size": 10,
+    "max_llm_context_size": 8192,
+    "max_llm_output_tokens": 2048,
+    "allowed_asr_models": ["whisper-large-v3-local"],
+    "allowed_llm_models": ["qwen35-4b-q4km-local"]
+  },
+  "asr": {
+    "model_alias": "whisper-large-v3-local",
+    "backend": "faster_whisper",
+    "compute_type": "int8_float16",
+    "batch_size": 1,
+    "beam_size": 5,
+    "word_timestamps": true,
+    "device": "cuda"
+  },
+  "llm": {
+    "model_alias": "qwen35-4b-q4km-local",
+    "backend": "llama_cpp",
+    "context_size": 8192,
+    "max_output_tokens": 2048,
+    "chat_template": "embedded",
+    "gpu_layers": -1
+  },
+  "scheduling": {"asr_before_llm": true, "max_concurrent_gpu_jobs": 1}
+}

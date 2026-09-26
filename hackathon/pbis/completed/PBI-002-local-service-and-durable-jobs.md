@@ -1,7 +1,7 @@
 # PBI-002: Create local API, storage and restartable jobs
 
 Parent: `hackathon/pbis/README.md`  
-Status: OPEN  
+Status: COMPLETE  
 Priority: P0 — today  
 Owner: You  
 Recommended model: **GPT-6 Sol**  
@@ -43,8 +43,6 @@ Old transcript migration, native overlay refactor, email implementation, EHR int
 
 ## Completion record
 
-- Commit / changed files: pending
-- Commands and observed behavior: pending
-- Acceptance evidence / limitations: pending
-- Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
-
+- Commit / changed files: uncommitted on `noomy/freepalestine`; `services/meeting/{api,contracts,storage,jobs,pipeline,media}.py`, service package/dependency files and README, focused jobs tests, `.gitignore`, contract/status updates.
+- Commands and observed behavior: 17 focused service/ASR/registry tests passed; Ruff and `compileall` passed. Actual FFmpeg ingest accepted synthetic WAV and MP4 with selected audio track; no-audio video, oversize input and simulated storage failure returned visible errors. The authorized Medpark M4A decoded to full-length WAV and returned a warning for one recoverable ALAC frame error; a synthetic warning persisted through the API. Parallel claim, duplicate API start, frozen model settings, expired lease, checkpoint reuse after failed commit and retry passed. A real local English-only CT2 model processed synthetic spoken audio on the laptop GPU through API/worker after simulated worker expiry: job `ready`, meeting `transcript_ready`, two timed segments, original source retained.
+- Acceptance evidence / limitations: PBI-002's durable ingest/job slice is complete. The current `ready` job means transcript completion only; structured minutes belong to later PBIs. Synthetic-only access is explicitly gated and real authorization belongs to PBI-005. FFmpeg is bounded by input size/duration, codec allowlist, threads, per-allocation maximum and process timeout; no OS aggregate memory cap is implemented. The system Python has unrelated package conflicts, so the pinned lock is intended for an isolated environment. Multilingual full large-v3 acceptance remains PBI-003/004.
