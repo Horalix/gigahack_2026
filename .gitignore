@@ -12,5 +12,7 @@ node_modules
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
-# local agent context
-CLAUDE.md
+# test attachments: real meeting documents must never be committed.
+# the synthetic sample is the one exception.
+pdf_to_send/*.pdf
+!pdf_to_send/sample-minutes.pdf
