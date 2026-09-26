@@ -59,6 +59,9 @@ Use [the live handoff](../10-team-handoff.md) for the current parallel order. A 
 | [022 — Prepare the privacy and ethics gate for a real pilot](PBI-022-eu-pilot-privacy-and-ethics.md) | Before real patient use | Luna / High | 001, 005, 015; does not block synthetic demo | OPEN |
 | [023 — Qualify hospital deployment and expansion](PBI-023-hospital-deployment-and-eu-scale.md) | After hackathon / before scaled deployment | Sol / High | 016, 017, 022 | OPEN |
 | [024 — Freeze the release and present measured results](PBI-024-demo-evidence-and-presentation.md) | P0 | Luna / Medium | Draft now; final claims depend on completed P0 and 017 | OPEN |
+| [025 — Compare Whisper and OmniASR on identical Medpark audio](PBI-025-whisper-omniasr-comparison.md) | P0 experiment | Luna / High | 003; consumes 004 baseline, supplies 017 | OPEN |
+
+PBI-025 is a separate core inference/evaluation experiment with concrete local input hashes and an executor runbook. It does not change the production model or replace PBI-017's one-hour end-to-end gate.
 
 ## Dependencies at a glance
 
