@@ -348,7 +348,7 @@
 </script>
 
 <svelte:head>
-  <title>FeelSay</title>
+  <title>Notavra</title>
 </svelte:head>
 
 <div class="app-window">
@@ -357,7 +357,7 @@
   <main class="utility-shell">
     <section class="utility-stack" aria-labelledby="app-title">
       <div class="identity">
-        <h1 id="app-title">FeelSay</h1>
+        <h1 id="app-title"><img src="/brand/lockup.png" alt="Notavra" /></h1>
         <p>Live captions and translation</p>
       </div>
 
@@ -485,9 +485,15 @@
 
   h1 {
     color: var(--fgColor-default);
-    font-size: 2rem;
     line-height: 1.1;
     letter-spacing: 0;
+  }
+
+  .identity h1 img {
+    display: block;
+    width: 168px;
+    height: 40px;
+    object-fit: contain;
   }
 
   .identity p {

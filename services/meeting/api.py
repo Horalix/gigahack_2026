@@ -2,18 +2,27 @@
 
 import asyncio
 import hashlib
+import ipaddress
 import json
 import os
 import uuid
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Header, Query, Request, UploadFile
+from fastapi import Cookie, Depends, FastAPI, File, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 
-from .contracts import CreateJob, CreateMeeting, ErrorEnvelope
+from .auth import AuthService, SESSION_COOKIE, SESSION_SECONDS
+from .contracts import CreateAccount, CreateJob, CreateMeeting, ErrorEnvelope, GrantMeetingAccess, LoginRequest, SetAccountActive
 from .media import MAX_UPLOAD_BYTES, MediaError, decode
 from .storage import Storage
+
+
+DEFAULT_ALLOWED_ORIGINS = {
+    "http://localhost:1420", "http://127.0.0.1:1420", "tauri://localhost",
+    "http://tauri.localhost", "https://tauri.localhost",
+}
 
 
 class ServiceError(Exception):
@@ -67,10 +76,30 @@ def segment_record(row: dict) -> dict:
 def create_app(data_root: Path | None = None) -> FastAPI:
     app = FastAPI(title="Secure MOM local meeting service", version="0.1.0", docs_url=None, redoc_url=None)
     app.state.store = Storage(data_root)
+    app.state.auth = AuthService(app.state.store)
+    configured_origins = os.environ.get("MOM_ALLOWED_ORIGINS")
+    allowed_origins = ({origin.strip() for origin in configured_origins.split(",") if origin.strip()}
+                       if configured_origins else DEFAULT_ALLOWED_ORIGINS)
+    app.state.allowed_origins = allowed_origins
+    app.add_middleware(CORSMiddleware, allow_origins=sorted(allowed_origins), allow_credentials=True,
+                       allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+                       allow_headers=["Content-Type"])
 
     @app.middleware("http")
     async def request_id(request: Request, call_next):
         request.state.request_id = str(uuid.uuid4())
+        client_host = request.client.host if request.client else ""
+        try:
+            local_client = ipaddress.ip_address(client_host).is_loopback
+        except ValueError:
+            local_client = client_host == "testclient"
+        origin = request.headers.get("origin")
+        if not local_client:
+            return JSONResponse(status_code=403, content={"code": "LOOPBACK_ONLY", "message": "Service accepts local connections only", "requestId": request.state.request_id})
+        if origin is not None and origin not in allowed_origins:
+            return JSONResponse(status_code=403, content={"code": "ORIGIN_DENIED", "message": "Request origin is not allowed", "requestId": request.state.request_id})
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and origin not in allowed_origins:
+            return JSONResponse(status_code=403, content={"code": "ORIGIN_REQUIRED", "message": "A trusted local origin is required", "requestId": request.state.request_id})
         response = await call_next(request)
         response.headers["X-Request-ID"] = request.state.request_id
         response.headers["Cache-Control"] = "no-store"
@@ -91,25 +120,76 @@ def create_app(data_root: Path | None = None) -> FastAPI:
     def store(request: Request) -> Storage:
         return request.app.state.store
 
-    def principal(request: Request, x_demo_principal: str | None = Header(default=None)) -> dict:
-        # PBI-005 replaces this hook. Demo access requires an explicit local-only opt-in.
-        host = request.client.host if request.client else ""
-        if os.environ.get("MOM_SYNTHETIC_DEV") == "1" and host in {"127.0.0.1", "::1", "testclient"} and x_demo_principal == "synthetic-demo":
-            return {"id": "user-demo-001", "organization_id": "org-demo"}
-        raise ServiceError(403, "ACCESS_DENIED", "Local authentication is required")
+    def principal(request: Request, token: str | None = Cookie(default=None, alias=SESSION_COOKIE)) -> dict:
+        user = request.app.state.auth.authenticate_session(token)
+        if not user:
+            raise ServiceError(401, "AUTH_REQUIRED", "Sign in to use this service")
+        return user
 
-    def meeting_or_404(meeting_id: str, actor: dict, db: Storage) -> dict:
+    def administrator(actor: dict = Depends(principal)) -> dict:
+        if actor["role"] != "administrator":
+            raise ServiceError(403, "ROLE_REQUIRED", "Administrator role is required")
+        return actor
+
+    def meeting_or_404(meeting_id: str, actor: dict, db: Storage, *, write: bool = False) -> dict:
         meeting = db.get_meeting(meeting_id, actor["organization_id"])
-        if not meeting:
+        permission = db.meeting_permission(meeting_id, actor["id"], actor["organization_id"]) if meeting else None
+        if not meeting or not permission:
             raise ServiceError(404, "MEETING_NOT_FOUND", "Meeting not found")
+        if write and permission not in {"owner", "editor"}:
+            raise ServiceError(403, "MEETING_READ_ONLY", "This account has read-only access")
         return meeting
 
+    @app.post("/api/auth/login")
+    def login(data: LoginRequest, request: Request, response: Response):
+        host = request.client.host if request.client else "127.0.0.1"
+        result = request.app.state.auth.authenticate_password(data.username, data.password, host)
+        if not result:
+            raise ServiceError(401, "INVALID_CREDENTIALS", "Username or password is incorrect")
+        token, user = result
+        response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_SECONDS, path="/",
+                            httponly=True, secure=request.url.scheme == "https", samesite="strict")
+        return {"user": user}
+
+    @app.get("/api/auth/me")
+    def current_user(actor: dict = Depends(principal)):
+        return {"user": AuthService.public_user(actor)}
+
+    @app.post("/api/auth/logout")
+    def logout(request: Request, response: Response, token: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
+        request.app.state.auth.logout(token)
+        response.delete_cookie(SESSION_COOKIE, path="/", httponly=True,
+                               secure=request.url.scheme == "https", samesite="strict")
+        return {"ok": True}
+
+    @app.get("/api/users")
+    def list_users(db: Storage = Depends(store), _actor: dict = Depends(administrator)):
+        return {"users": [{"id": row["id"], "username": row["username"], "role": row["role"],
+                           "active": bool(row["active"]), "createdAt": row["created_at"]} for row in db.list_users()]}
+
+    @app.post("/api/users", status_code=201)
+    def create_user(data: CreateAccount, request: Request, _actor: dict = Depends(administrator)):
+        try:
+            user = request.app.state.auth.create_user(
+                request.app.state.store.installation_organization(), data.username, data.password, data.role)
+        except ValueError as exc:
+            raise ServiceError(409, "ACCOUNT_NOT_CREATED", str(exc)) from exc
+        return {"user": AuthService.public_user(user)}
+
+    @app.patch("/api/users/{user_id}")
+    def set_user_active(user_id: str, data: SetAccountActive, db: Storage = Depends(store), _actor: dict = Depends(administrator)):
+        if not db.set_user_active(user_id, data.active):
+            raise ServiceError(404, "USER_NOT_FOUND", "Account not found")
+        return {"id": user_id, "active": data.active}
+
     @app.get("/api/health")
-    def health():
-        return {"status": "ok", "service": "meeting"}
+    def health(db: Storage = Depends(store)):
+        return {"status": "ok", "service": "meeting", "setupRequired": db.user_count() == 0}
 
     @app.post("/api/meetings", status_code=201)
     def create_meeting(data: CreateMeeting, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        if actor["role"] == "reviewer":
+            raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot create meetings")
         if data.patientLinkIds:
             raise ServiceError(422, "PATIENT_LINKS_UNAVAILABLE", "Patient links require the access service")
         item = data.model_dump()
@@ -122,6 +202,32 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         return {"meeting": meeting_record(meeting),
                 "asset": asset_record(db.latest_asset(meeting_id, actor["organization_id"])),
                 "segments": [segment_record(row) for row in db.get_segments(meeting_id, actor["organization_id"])]}
+
+    @app.get("/api/meetings/{meeting_id}/grants")
+    def get_meeting_grants(meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting_or_404(meeting_id, actor, db)
+        if db.meeting_permission(meeting_id, actor["id"], actor["organization_id"]) != "owner":
+            raise ServiceError(403, "GRANT_OWNER_REQUIRED", "Only the meeting owner can manage access")
+        return {"grants": db.meeting_grants(meeting_id, actor["organization_id"])}
+
+    @app.post("/api/meetings/{meeting_id}/grants", status_code=201)
+    def grant_meeting_access(meeting_id: str, data: GrantMeetingAccess, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting_or_404(meeting_id, actor, db)
+        if db.meeting_permission(meeting_id, actor["id"], actor["organization_id"]) != "owner":
+            raise ServiceError(403, "GRANT_OWNER_REQUIRED", "Only the meeting owner can manage access")
+        if not db.grant_meeting(meeting_id, actor["organization_id"], data.userId,
+                                data.permission, actor["id"]):
+            raise ServiceError(404, "USER_NOT_FOUND", "Account not found")
+        return {"meetingId": meeting_id, "userId": data.userId, "permission": data.permission}
+
+    @app.delete("/api/meetings/{meeting_id}/grants/{user_id}")
+    def revoke_meeting_access(meeting_id: str, user_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting_or_404(meeting_id, actor, db)
+        if db.meeting_permission(meeting_id, actor["id"], actor["organization_id"]) != "owner":
+            raise ServiceError(403, "GRANT_OWNER_REQUIRED", "Only the meeting owner can manage access")
+        if user_id == actor["id"] or not db.revoke_meeting_grant(meeting_id, actor["organization_id"], user_id):
+            raise ServiceError(404, "GRANT_NOT_FOUND", "Access grant not found")
+        return {"ok": True}
 
     @app.get("/api/profiles")
     def get_profiles(actor: dict = Depends(principal)):
@@ -144,7 +250,7 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         audio_track_index: int | None = Query(default=None, ge=0),
         actor: dict = Depends(principal), db: Storage = Depends(store),
     ):
-        meeting_or_404(meeting_id, actor, db)
+        meeting_or_404(meeting_id, actor, db, write=True)
         asset_id = str(uuid.uuid4())
         source = db.asset_path(meeting_id, asset_id, ".source")
         decoded = db.asset_path(meeting_id, asset_id, ".wav")
@@ -185,7 +291,7 @@ def create_app(data_root: Path | None = None) -> FastAPI:
 
     @app.post("/api/meetings/{meeting_id}/jobs", status_code=202)
     def create_job(data: CreateJob, meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
-        meeting_or_404(meeting_id, actor, db)
+        meeting_or_404(meeting_id, actor, db, write=True)
         asset = db.latest_asset(meeting_id, actor["organization_id"])
         if not asset:
             raise ServiceError(409, "AUDIO_REQUIRED", "Upload or record audio before starting a job")
@@ -204,12 +310,17 @@ def create_app(data_root: Path | None = None) -> FastAPI:
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
         job = db.get_job(job_id, actor["organization_id"])
-        if not job:
+        if not job or not db.meeting_permission(job["meeting_id"], actor["id"], actor["organization_id"]):
             raise ServiceError(404, "JOB_NOT_FOUND", "Job not found")
         return job_record(job)
 
     @app.post("/api/jobs/{job_id}/retry", status_code=202)
     def retry_job(job_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        current = db.get_job(job_id, actor["organization_id"])
+        if not current or not db.meeting_permission(current["meeting_id"], actor["id"], actor["organization_id"]):
+            raise ServiceError(404, "JOB_NOT_FOUND", "Job not found")
+        if db.meeting_permission(current["meeting_id"], actor["id"], actor["organization_id"]) not in {"owner", "editor"}:
+            raise ServiceError(403, "MEETING_READ_ONLY", "This account has read-only access")
         job = db.retry_job(job_id, actor["organization_id"])
         if not job:
             raise ServiceError(409, "JOB_NOT_RETRYABLE", "The job cannot be retried")

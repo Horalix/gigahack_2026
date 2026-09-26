@@ -47,7 +47,7 @@ pub enum SessionState {
 #[tauri::command]
 pub fn get_app_metadata() -> AppMetadata {
     AppMetadata {
-        product_name: "FeelSay".to_string(),
+        product_name: "Notavra".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
     }
 }

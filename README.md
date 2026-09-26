@@ -1,10 +1,10 @@
-# FeelSay
+# Notavra
 
 Windows desktop captions with local speech recognition and a movable subtitle overlay.
 
 ## Use
 
-1. Install the Windows setup package and open FeelSay.
+1. Install the Windows setup package and open Notavra.
 2. Choose **Select Source**: system playback, a microphone, or a supported application.
 3. Press **Start**. First use downloads and verifies a 142 MB multilingual speech model; subsequent captions work offline.
 4. Drag the subtitle box to move it; drag its edges to resize. Its corner control changes text size, colors, opacity, and transcript saving immediately.
@@ -22,7 +22,7 @@ Saving is **off by default**. Enable or disable it in Settings or the overlay co
 
 Settings > Transcripts provides history, viewing, copying, TXT/SRT/VTT/JSON export, and individual deletion. Files include session timing, source labels, finalized text, and translation when available. Transcript saving stops with a visible notice at 100 sessions or 64 MiB of database data. Exports have a separate 64 MiB limit. Delete older sessions to free capacity, then enable saving again.
 
-Audio and transcript content are not uploaded. The network is used to obtain the speech model. Settings, model files, and transcripts live under `%APPDATA%/app.feelsay.desktop`. The native overlay uses a temporary current-caption file, held with Windows delete-on-close protection and removed when capture stops or the owning process exits; it is not transcript history. SQLite secure deletion and deletion of FeelSay-managed exports prevent deleted history from remaining accessible in the application. Copies made elsewhere, clipboard history, OS backups, and forensic recovery from storage are outside the application's deletion controls.
+Audio and transcript content are not uploaded. The network is used to obtain the speech model. Settings, model files, and transcripts live under `%APPDATA%/app.feelsay.desktop`; this legacy internal identifier is retained by Notavra so existing local data remains available. The native overlay uses a temporary current-caption file, held with Windows delete-on-close protection and removed when capture stops or the owning process exits; it is not transcript history. SQLite secure deletion and deletion of Notavra-managed exports prevent deleted history from remaining accessible in the application. Copies made elsewhere, clipboard history, OS backups, and forensic recovery from storage are outside the application's deletion controls.
 
 Click-through makes the overlay controls inaccessible by mouse; turn it off in Settings. Optional shortcuts are Ctrl+Shift+C (captions), Ctrl+Shift+O (overlay visibility), and Ctrl+Shift+X (click-through), when another application has not reserved them.
 
@@ -32,7 +32,12 @@ End users need no Python, FFmpeg, CUDA, compiler, or manually installed speech m
 
 ```powershell
 npm ci
-$env:LIBCLANG_PATH = 'C:/Program Files/LLVM/bin'
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-build.ps1 -Task dev
+```
+
+This helper configures libclang, the Visual C++ and Windows SDK headers, and Visual Studio's bundled CMake before launching Tauri. For packaging instead, run:
+
+```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-build.ps1 -Task package
 ```
 

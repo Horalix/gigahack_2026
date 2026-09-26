@@ -33,6 +33,34 @@ class CreateJob(BaseModel):
     llmModelAlias: str | None = None
 
 
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class CreateAccount(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=3, max_length=64)
+    password: str = Field(min_length=12, max_length=256)
+    role: Literal["clinician", "reviewer", "administrator"]
+
+
+class SetAccountActive(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    active: bool
+
+
+class GrantMeetingAccess(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    userId: str = Field(min_length=1, max_length=128)
+    permission: Literal["editor", "viewer"]
+
+
 class ErrorEnvelope(BaseModel):
     code: str
     message: str

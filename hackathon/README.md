@@ -1,6 +1,6 @@
 # Secure MOM: start here
 
-**Updated 26 September 2026 · deadline: today · inspected baseline: `develop`, `eb4d808`.**
+**Updated 26 September 2026 · deadline: today · current implementation checkpoint: `noomy/freepalestine`, `820f1a9`.**
 
 **Start with [the live team handoff](10-team-handoff.md), then [the PBI index](pbis/README.md).** The handoff governs current staffing and state; the index governs priorities, dependencies, model assignments and completion. Completed PBIs move to `pbis/completed/` with acceptance evidence. Read [patient data and EU gates](09-patient-data-and-eu.md) before implementing patient features.
 

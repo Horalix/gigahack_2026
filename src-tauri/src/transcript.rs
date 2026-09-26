@@ -746,7 +746,7 @@ fn render_export(
 }
 
 fn render_txt(session: &TranscriptSessionSummary, segments: &[TranscriptSegment]) -> String {
-    let mut lines = vec![format!("FeelSay transcript - {}", session.source_summary)];
+    let mut lines = vec![format!("Notavra transcript - {}", session.source_summary)];
 
     if segments.is_empty() {
         lines.push("No transcript segments saved.".to_string());

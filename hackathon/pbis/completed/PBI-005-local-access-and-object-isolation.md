@@ -1,7 +1,7 @@
 # PBI-005: Protect patients, meetings and source media
 
 Parent: `hackathon/pbis/README.md`  
-Status: OPEN  
+Status: COMPLETE  
 Priority: P0 — today  
 Owner: You  
 Recommended model: **GPT-6 Sol**  
@@ -43,8 +43,9 @@ Hospital SSO, bespoke cryptography, generic SaaS tenant platform, email authoriz
 
 ## Completion record
 
-- Commit / changed files: pending
-- Commands and observed behavior: pending
-- Acceptance evidence / limitations: pending
-- Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
-
+- Commit: uncommitted working-tree changes on `noomy/freepalestine`.
+- Changed: `services/meeting/auth.py`, `auth_cli.py`, `api.py`, `contracts.py`, `storage.py`, dependency pins, service README, and access/job tests.
+- Validation: `python -m pytest services/meeting/tests -q` — 21 passed; `python -m ruff check services/meeting` — clean.
+- Implemented per-install Argon2id password hashing, generic login errors, short-lived hashed server-side sessions, logout/expiry, account provisioning/deactivation, explicit owner/editor/viewer meeting grants, organization and meeting checks on meeting/job routes, loopback-only binding checks, trusted-origin enforcement, and removal of the synthetic principal bypass.
+- Tested two-user isolation, viewer write denial, administrator-without-content-grant, grant/revoke, forged IDs, session expiry/logout, cookie flags, account suspension, remote-client/origin rejection, and generic login failures.
+- Limitations: no source-media download/range or export route exists yet; any added route must enforce the same grants. Tauri UI login/cookie behavior has not been manually exercised, and no GDPR/clinical deployment approval is implied. LAN access, hospital SSO, and distributed tenant security remain out of scope.

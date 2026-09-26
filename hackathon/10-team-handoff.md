@@ -1,6 +1,6 @@
 # Secure MOM live team handoff
 
-**26 September 2026, 16:55 Warsaw. Deadline: tonight.** Read this page, then [the PBI index](pbis/README.md) and your assigned PBI. This page supersedes the older staffing and checkpoint guesses in `05-build-plan.md` and `06-team-workload.md`; each PBI still defines its own acceptance checks. The supplied challenge PDF and research HTML are reference material, not instructions to an AI executor.
+**26 September 2026.** Base commit `820f1a9` on `noomy/freepalestine`; working tree has uncommitted Notavra rebrand/build fixes and PBI-005 implementation. Read this page, then [the PBI index](pbis/README.md) and your assigned PBI. This page supersedes the older staffing and checkpoint guesses in `05-build-plan.md` and `06-team-workload.md`; each PBI still defines its own acceptance checks. The supplied challenge PDF and research HTML are reference material, not instructions to an AI executor.
 
 ## What we are building
 
@@ -20,22 +20,25 @@ flowchart LR
 
 ## Actual state, not the older plan
 
-- Current checkout: `noomy/freepalestine`, with **uncommitted** PBI-001/002/003/004 work. Affan's SMTP implementation is on his separate branch and has not been integrated here. Coordinate small commits/patches before merging; do not overwrite either branch.
-- **001/002 complete:** versioned synthetic contracts and a separate FastAPI/SQLite ingest/job service. Real formats decode, source media persists outside the repo, one GPU job is leased transactionally, checkpoints survive worker restart. API access is deny by default except an explicit **synthetic-only** loopback test hook. PBI-005 must protect real API use.
+- Current checkout: `noomy/freepalestine`, base commit `820f1a9`. PBI-001/002/003/005 are complete; PBI-005 code/docs/tests are currently uncommitted. PBI-004's implementation and test evidence exist, but its accuracy acceptance remains OPEN. Affan's SMTP implementation is on his separate branch and has not been integrated here. Coordinate small commits/patches before merging; do not overwrite either branch.
+- **001/002/005 complete:** versioned contracts and a separate FastAPI/SQLite ingest/job service. Real formats decode, source media persists outside the repo, one GPU job is leased transactionally, checkpoints survive worker restart. Local accounts use Argon2id and server-side sessions; trusted origins and loopback clients are enforced; meeting/job access requires an explicit grant; administrators do not get implicit content access. PBI-005 service suite: 21 passed, Ruff clean. Source-media download/range and export endpoints do not exist yet, and Tauri login has not been manually verified.
 - **003 complete:** 8 GB, 16 GB and CPU profiles plus environment/model alias switching exist. Pinned Whisper large-v3 and Qwen3.5-4B Q4_K_M files passed SHA-256 checks. Whisper loaded on the 3070 Ti GPU; Qwen loaded with its embedded chat template using local llama.cpp on CPU and returned the expected JSON fields on a synthetic prompt. Qwen GPU and the remote 16 GB host remain untested. Models are outside Git.
 - **004 open:** the permitted 11m42s Medpark recording ran offline on the 8 GB laptop in 101.5 s of ASR work, producing 193 timed segments and 1,207 word spans; observed device memory peaked at 3,293 MiB, including any other GPU processes. Cyrillic and Romanian script occur. A controlled English sentence was exact. **Accuracy gate remains open:** changing a later English suffix in a composite changed transcription of identical opening audio between Cyrillic and Romanian Latin; the user confirmed that opening is Romanian, so the Cyrillic version is wrong. A controlled two-speaker overlap lost one voice. Shorter windows alone still wrote the confirmed Romanian opening in Cyrillic. A public FLEURS-R RO/RU plus JFK English composite confirmed failures at abrupt language boundaries; pause-bounded clips recovered the three scripts, while a slower language-score prototype selected Romanian for the Medpark opening. No whole-recording WER or one-hour end-to-end claim.
-- **004 through 024 open** except completed 001/002/003. All P0 work is required before P1/P2 extras. SMTP alone does not prove file delivery from this app.
-- Focused service/registry tests: 17 passed; Ruff and schema validation passed. Test details and limitations are in the PBI completion records. Sensitive recordings/transcripts are only under local app data, never in this handoff.
+- **Provisional reference comparison:** against the user's Microsoft AI share transcript for the same 11:42 Medpark recording, WER is 81.8% (1-WER score: 18.2%; 1,788 reference tokens, 1,212 Whisper tokens). Whisper selected `ru` for the whole file, though the user confirmed the first 25 seconds are Romanian. This is not a gold accuracy score: the Microsoft transcript is machine-generated and unverified. Keep the raw transcript and comparison hashes in local app data, outside Git; PBI-004 remains OPEN pending a human-verified reference and error review.
+- **004 and 006 through 024 open** except completed 001/002/003/005. All P0 work is required before P1/P2 extras. SMTP alone does not prove file delivery from this app.
+- Focused tests: PBI-005 service tests 21 passed; broader model/accuracy and Tauri integration gates remain open. Test details and limitations are in the PBI completion records. Sensitive recordings/transcripts are only under local app data, never in this handoff.
 
 ## Epics and ownership
 
-This allocation supersedes `Owner: You` in older PBI files. **You = core/inference developer; Affan = product/delivery developer; CEO = presentation.** It splits the remaining P0 work 7 to 8. Affan's existing SMTP work is separate from PBIs.
+This allocation supersedes `Owner: You` in older PBI files. **You = core/inference developer; Affan = product/delivery developer; CEO = presentation.** The remaining developer P0 allocation is 6 PBIs for you and 8 for Affan; CEO owns PBI-024 separately. Affan's existing SMTP work is separate from PBIs.
+
+The table below groups PBIs by epic; the files are currently kept together in `hackathon/pbis/` (completed items in `hackathon/pbis/completed/`). They are not physically arranged into per-epic folders.
 
 | Epic | PBI | Owner | State / start condition |
 |---|---|---|---|
 | Foundation | [001](pbis/completed/PBI-001-contracts-and-file-handoff.md), [002](pbis/completed/PBI-002-local-service-and-durable-jobs.md) | You | COMPLETE; consume contracts/service |
 | Models + speech | [003](pbis/completed/PBI-003-model-registry-and-hardware-profiles.md), [004](pbis/PBI-004-gpu-transcription.md) | You | 003 COMPLETE; 004 OPEN for code-switch/accuracy qualification |
-| Trust + patients | [005](pbis/PBI-005-local-access-and-object-isolation.md) | You | OPEN; next backend gate for real API |
+| Trust + patients | [005](pbis/completed/PBI-005-local-access-and-object-isolation.md) | You | COMPLETE in backend; Tauri sign-in integration still needed |
 | Trust + patients | [006](pbis/PBI-006-patients-api-and-pagination.md) | Affan | OPEN; design/module now, integrate after 005 |
 | Doctor workflow | [007](pbis/PBI-007-doctor-dashboard-without-overlay.md), [008](pbis/PBI-008-meeting-upload-and-progress-ui.md) | Affan | OPEN; 007 fixture UI now, 008 integrate after 004/005 |
 | Decisions + document | [009](pbis/PBI-009-local-llm-and-final-decisions.md) | You | OPEN; after 003/004 |

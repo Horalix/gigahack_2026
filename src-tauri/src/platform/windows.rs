@@ -586,9 +586,11 @@ fn is_feelsay_process(title: &str, process_path: Option<&str>) -> bool {
     process_path
         .and_then(|path| Path::new(path).file_stem())
         .and_then(|name| name.to_str())
-        .map(|name| name.eq_ignore_ascii_case("feelsay"))
+        .map(|name| name.eq_ignore_ascii_case("notavra") || name.eq_ignore_ascii_case("feelsay"))
         .unwrap_or_else(|| {
-            title.eq_ignore_ascii_case("FeelSay")
+            title.eq_ignore_ascii_case("Notavra")
+                || title.eq_ignore_ascii_case("Notavra Caption Window")
+                || title.eq_ignore_ascii_case("FeelSay")
                 || title.eq_ignore_ascii_case("FeelSay Caption Window")
         })
 }
@@ -607,6 +609,8 @@ fn source_filter_does_not_hide_other_apps_discussing_feelsay() {
     assert!(!is_feelsay_process("FeelSay documentation", None));
     assert!(is_feelsay_process("Captions", Some("C:/app/FeelSay.exe")));
     assert!(is_feelsay_process("FeelSay Caption Window", None));
+    assert!(is_feelsay_process("Notavra", Some("C:/app/Notavra.exe")));
+    assert!(is_feelsay_process("Notavra Caption Window", None));
 }
 
 #[cfg(target_os = "windows")]

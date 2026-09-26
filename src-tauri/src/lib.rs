@@ -101,7 +101,7 @@ pub fn run() {
             commands::open_transcript_exports
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Feelsay");
+        .expect("error while running Notavra");
 }
 
 fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
@@ -110,7 +110,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         tray::TrayIconBuilder,
     };
 
-    let show = MenuItem::with_id(app, "show", "Show Feelsay", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "Show Notavra", true, None::<&str>)?;
     let toggle = MenuItem::with_id(app, "toggle", "Start / Stop", true, None::<&str>)?;
     let overlay = MenuItem::with_id(app, "overlay", "Show / Hide Overlay", true, None::<&str>)?;
     let click_through = MenuItem::with_id(

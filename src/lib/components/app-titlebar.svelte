@@ -44,8 +44,8 @@
     aria-label="Move window"
     onpointerdown={startDragging}
   >
-    <span class="app-dot" aria-hidden="true"></span>
-    <span>FeelSay</span>
+    <img class="app-symbol" src="/brand/symbol.svg" alt="" />
+    <span>Notavra</span>
   </button>
 
   <div class="window-controls" aria-label="Window controls">
@@ -92,13 +92,10 @@
     text-align: left;
   }
 
-  .app-dot {
-    width: 10px;
-    height: 10px;
+  .app-symbol {
+    width: 18px;
+    height: 18px;
     flex: 0 0 auto;
-    border-radius: 50%;
-    background: var(--button-primary-bgColor-rest);
-    box-shadow: inset 0 0 0 3px oklch(23.13% 0.012 270.86);
   }
 
   .window-controls {

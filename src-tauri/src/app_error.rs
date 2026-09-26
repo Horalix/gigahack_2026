@@ -41,11 +41,11 @@ impl AppError {
                 "Audio capture could not start. Check the selected source and try again.".to_string()
             }
             Self::Io(message) if mentions(message, &["permission", "access", "denied"]) => {
-                "Feelsay could not access local app data. Check folder permissions and try again.".to_string()
+                "Notavra could not access local app data. Check folder permissions and try again.".to_string()
             }
             Self::Io(message) if message.starts_with("Speech model ") || message.starts_with("Transcript ") => message.clone(),
             Self::Io(_) => {
-                "Feelsay could not read or write local app data. Restart the app and try again.".to_string()
+                "Notavra could not read or write local app data. Restart the app and try again.".to_string()
             }
             Self::Translation(message) if mentions(message, &["source language"]) => {
                 "Choose a source language in Settings -> Translation, then try again.".to_string()

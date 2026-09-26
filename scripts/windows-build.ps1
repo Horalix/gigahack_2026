@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('build', 'test', 'fixtures', 'lint', 'package')]
+    [ValidateSet('dev', 'build', 'test', 'fixtures', 'lint', 'package')]
     [string]$Task = 'package',
     [switch]$Release
 )
@@ -31,6 +31,7 @@ try {
     $env:BINDGEN_EXTRA_CLANG_ARGS = '-isystem "' + $vcInclude + '" -isystem "' + (Join-Path $sdk.FullName 'ucrt') + '"'
     [string[]]$releaseArgs = if ($Release) { @('--release') } else { @() }
     switch ($Task) {
+        'dev' { npm run tauri -- dev }
         'build' { cargo build @releaseArgs --manifest-path src-tauri/Cargo.toml }
         'test' { cargo test @releaseArgs --manifest-path src-tauri/Cargo.toml }
         'fixtures' { cargo test @releaseArgs --manifest-path src-tauri/Cargo.toml real_model_recognizes_prerecorded_speech_and_saves_final_chunks -- --ignored --nocapture }

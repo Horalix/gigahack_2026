@@ -356,7 +356,7 @@
     {:else}<p role="status">Loading settings…</p>{/if}
   </div>
   <footer>
-    <span>FeelSay · Local captions</span><button onclick={() => void close()}
+    <span>Notavra · Local captions</span><button onclick={() => void close()}
       >Done</button
     >
   </footer>

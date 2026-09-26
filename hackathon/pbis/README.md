@@ -1,6 +1,6 @@
 # Secure MOM execution backlog
 
-**26 September 2026; finish today; current implementation checkout: `noomy/freepalestine` (uncommitted).**
+**26 September 2026; finish today; base implementation checkpoint: `noomy/freepalestine`, commit `820f1a9`; uncommitted work is present.**
 
 This index supersedes the older task order. PBIs 001, 002 and 003 are complete; 004 remains OPEN for accuracy qualification. [The live team handoff](../10-team-handoff.md) governs current evidence, epic ownership and branch boundaries, superseding old Owner labels in individual PBIs. Affan finished SMTP on his separate branch; integration has not been verified.
 
@@ -14,8 +14,8 @@ P0 = required today, including user-added patients/live/editing and CEO presenta
 
 ## Start now
 
-1. **You:** finish PBI-004 code-switch and accuracy qualification, then PBI-005 access and PBI-009 local decisions.
-2. **Affan:** PBI-010 fixture renderer and file handoff on his branch, then PBI-007 dashboard. PBI-006 patient module can be prepared against fixtures; integration waits for PBI-005.
+1. **You:** PBI-005 access is implemented and tested; continue PBI-004 code-switch/accuracy qualification, then PBI-009 local decisions.
+2. **Affan:** PBI-010 fixture renderer and file handoff on his branch, then PBI-007 dashboard. PBI-006 patient module can be prepared against fixtures; PBI-005 backend access is ready to integrate.
 3. **CEO:** PBI-024 pitch and permitted evaluation references now. The final performance and delivery claims wait for PBI-017 and Affan's integrated SMTP path.
 
 ## Model budget rules
@@ -37,7 +37,7 @@ Use [the live handoff](../10-team-handoff.md) for the current parallel order. A 
 | [002 — Create local API, storage and restartable jobs](completed/PBI-002-local-service-and-durable-jobs.md) | P0 | Sol / High | 001 | COMPLETE |
 | [003 — Prepare local model registry and 8/16 GB profiles](completed/PBI-003-model-registry-and-hardware-profiles.md) | P0 | Luna / High | 001 | COMPLETE |
 | [004 — Transcribe real audio on the laptop GPU](PBI-004-gpu-transcription.md) | P0 | Sol / High | 002, 003 | OPEN |
-| [005 — Protect patients, meetings and source media](PBI-005-local-access-and-object-isolation.md) | P0 | Sol / High | 001, 002 | OPEN |
+| [005 — Protect patients, meetings and source media](completed/PBI-005-local-access-and-object-isolation.md) | P0 | Sol / High | 001, 002 | COMPLETE |
 | [006 — Create a minimal searchable patient directory](PBI-006-patients-api-and-pagination.md) | P0 | Luna / High | 001, 002, 005 | OPEN |
 | [007 — Replace the caption home with the doctor dashboard](PBI-007-doctor-dashboard-without-overlay.md) | P0 | Luna / Medium | 001; integrate 005 and 006 | OPEN |
 | [008 — Connect audio/video upload to real processing](PBI-008-meeting-upload-and-progress-ui.md) | P0 | Luna / Medium | 002, 004, 005; fixture development after 001 | OPEN |

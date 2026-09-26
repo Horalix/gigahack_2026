@@ -12,7 +12,7 @@ from typing import Iterator
 
 
 LEASE_SECONDS = 30
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def default_data_root() -> Path:
@@ -111,6 +111,26 @@ class Storage:
             if current < 3:
                 db.execute("ALTER TABLE assets ADD COLUMN decode_warning TEXT")
                 db.execute("PRAGMA user_version=3")
+            if current < 4:
+                legacy_org = db.execute("SELECT organization_id FROM meetings ORDER BY created_at LIMIT 1").fetchone()
+                org_id = legacy_org["organization_id"] if legacy_org else f"org-{uuid.uuid4()}"
+                db.execute("CREATE TABLE installation (singleton INTEGER PRIMARY KEY CHECK(singleton=1), organization_id TEXT NOT NULL)")
+                db.execute("INSERT INTO installation(singleton,organization_id) VALUES(1,?)", (org_id,))
+                db.execute("""CREATE TABLE users (
+                    id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, username TEXT NOT NULL,
+                    password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('clinician','reviewer','administrator')),
+                    active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)), created_at TEXT NOT NULL,
+                    UNIQUE(organization_id,username))""")
+                db.execute("CREATE TABLE auth_sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL, expires_at REAL NOT NULL, revoked_at TEXT)")
+                db.execute("""CREATE TABLE meeting_grants (
+                    meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+                    organization_id TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    permission TEXT NOT NULL CHECK(permission IN ('owner','editor','viewer')),
+                    granted_by TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL,
+                    PRIMARY KEY(meeting_id,user_id))""")
+                db.execute("CREATE INDEX meeting_grants_user ON meeting_grants(organization_id,user_id,meeting_id)")
+                db.execute("CREATE INDEX auth_sessions_user ON auth_sessions(user_id,expires_at)")
+                db.execute("PRAGMA user_version=4")
 
     def asset_path(self, meeting_id: str, asset_id: str, suffix: str) -> Path:
         # IDs are generated locally; never put an uploaded name into a filesystem path.
@@ -142,7 +162,129 @@ class Storage:
                  status, transcript_revision, created_at, updated_at)
                 VALUES (:id, :organization_id, :title, :recorded_at, :time_zone, :output_language,
                         :meeting_type, :status, :transcript_revision, :created_at, :updated_at)""", row)
+            db.execute("""INSERT INTO meeting_grants
+                (meeting_id,organization_id,user_id,permission,granted_by,created_at)
+                VALUES(?,?,?,'owner',?,?)""",
+                (row["id"], row["organization_id"], principal["id"], principal["id"], now))
         return row
+
+    def installation_organization(self) -> str:
+        with closing(self.connect()) as db:
+            return db.execute("SELECT organization_id FROM installation WHERE singleton=1").fetchone()[0]
+
+    def create_user(self, organization_id: str, username: str, password_hash: str, role: str, *, bootstrap: bool = False) -> dict:
+        now = timestamp()
+        row = {"id": str(uuid.uuid4()), "organization_id": organization_id, "username": username,
+               "password_hash": password_hash, "role": role, "active": 1, "created_at": now}
+        with self.transaction() as db:
+            if bootstrap and db.execute("SELECT 1 FROM users LIMIT 1").fetchone():
+                raise ValueError("Initial administrator already exists")
+            try:
+                db.execute("""INSERT INTO users(id,organization_id,username,password_hash,role,active,created_at)
+                    VALUES(:id,:organization_id,:username,:password_hash,:role,:active,:created_at)""", row)
+            except sqlite3.IntegrityError as exc:
+                raise ValueError("Username is already provisioned") from exc
+            if bootstrap:
+                db.execute("""INSERT INTO meeting_grants
+                    (meeting_id,organization_id,user_id,permission,granted_by,created_at)
+                    SELECT id,organization_id,?, 'owner', ?, ? FROM meetings WHERE organization_id=?""",
+                    (row["id"], row["id"], now, organization_id))
+        return row
+
+    def user_count(self) -> int:
+        with closing(self.connect()) as db:
+            return db.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+
+    def get_user_by_username(self, username: str) -> dict | None:
+        with closing(self.connect()) as db:
+            row = db.execute("SELECT * FROM users WHERE organization_id=(SELECT organization_id FROM installation WHERE singleton=1) AND username=?",
+                             (username,)).fetchone()
+            return dict(row) if row else None
+
+    def get_user(self, user_id: str) -> dict | None:
+        with closing(self.connect()) as db:
+            row = db.execute("SELECT * FROM users WHERE id=? AND organization_id=(SELECT organization_id FROM installation WHERE singleton=1)",
+                             (user_id,)).fetchone()
+            return dict(row) if row else None
+
+    def list_users(self) -> list[dict]:
+        with closing(self.connect()) as db:
+            rows = db.execute("""SELECT id,organization_id,username,role,active,created_at FROM users
+                WHERE organization_id=(SELECT organization_id FROM installation WHERE singleton=1)
+                ORDER BY username,id""").fetchall()
+            return [dict(row) for row in rows]
+
+    def set_user_active(self, user_id: str, active: bool) -> bool:
+        with self.transaction() as db:
+            result = db.execute("""UPDATE users SET active=? WHERE id=?
+                AND organization_id=(SELECT organization_id FROM installation WHERE singleton=1)""",
+                (int(active), user_id))
+            if result.rowcount:
+                db.execute("UPDATE auth_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+                           (timestamp(), user_id))
+            return result.rowcount == 1
+
+    def update_password_hash(self, user_id: str, password_hash: str) -> None:
+        with self.transaction() as db:
+            db.execute("UPDATE users SET password_hash=? WHERE id=?", (password_hash, user_id))
+
+    def create_session(self, token_hash: str, user_id: str, lifetime_seconds: int) -> None:
+        now = time.time()
+        with self.transaction() as db:
+            db.execute("DELETE FROM auth_sessions WHERE expires_at<=? OR revoked_at IS NOT NULL", (now,))
+            db.execute("INSERT INTO auth_sessions(token_hash,user_id,created_at,expires_at) VALUES(?,?,?,?)",
+                       (token_hash, user_id, timestamp(now), now + lifetime_seconds))
+
+    def get_session_user(self, token_hash: str) -> dict | None:
+        with closing(self.connect()) as db:
+            row = db.execute("""SELECT u.id,u.organization_id,u.username,u.role,u.active
+                FROM auth_sessions s JOIN users u ON u.id=s.user_id
+                WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>?""",
+                (token_hash, time.time())).fetchone()
+            return dict(row) if row and row["active"] else None
+
+    def revoke_session(self, token_hash: str) -> None:
+        with self.transaction() as db:
+            db.execute("UPDATE auth_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL",
+                       (timestamp(), token_hash))
+
+    def meeting_permission(self, meeting_id: str, user_id: str, organization_id: str) -> str | None:
+        with closing(self.connect()) as db:
+            row = db.execute("""SELECT g.permission FROM meeting_grants g JOIN meetings m ON m.id=g.meeting_id
+                WHERE g.meeting_id=? AND g.user_id=? AND g.organization_id=? AND m.organization_id=?""",
+                (meeting_id, user_id, organization_id, organization_id)).fetchone()
+            return row["permission"] if row else None
+
+    def grant_meeting(self, meeting_id: str, organization_id: str, user_id: str,
+                      permission: str, granted_by: str) -> bool:
+        if permission not in {"editor", "viewer"}:
+            raise ValueError("Grant permission must be editor or viewer")
+        with self.transaction() as db:
+            meeting = db.execute("SELECT 1 FROM meetings WHERE id=? AND organization_id=?",
+                                 (meeting_id, organization_id)).fetchone()
+            user = db.execute("SELECT 1 FROM users WHERE id=? AND organization_id=? AND active=1",
+                              (user_id, organization_id)).fetchone()
+            if not meeting or not user:
+                return False
+            db.execute("""INSERT INTO meeting_grants(meeting_id,organization_id,user_id,permission,granted_by,created_at)
+                VALUES(?,?,?,?,?,?) ON CONFLICT(meeting_id,user_id) DO UPDATE SET
+                permission=excluded.permission,granted_by=excluded.granted_by,created_at=excluded.created_at""",
+                (meeting_id, organization_id, user_id, permission, granted_by, timestamp()))
+            return True
+
+    def meeting_grants(self, meeting_id: str, organization_id: str) -> list[dict]:
+        with closing(self.connect()) as db:
+            rows = db.execute("""SELECT g.user_id,g.permission,u.username,g.granted_by,g.created_at
+                FROM meeting_grants g JOIN users u ON u.id=g.user_id
+                WHERE g.meeting_id=? AND g.organization_id=? ORDER BY u.username""",
+                (meeting_id, organization_id)).fetchall()
+            return [dict(row) for row in rows]
+
+    def revoke_meeting_grant(self, meeting_id: str, organization_id: str, user_id: str) -> bool:
+        with self.transaction() as db:
+            result = db.execute("""DELETE FROM meeting_grants WHERE meeting_id=? AND organization_id=?
+                AND user_id=? AND permission!='owner'""", (meeting_id, organization_id, user_id))
+            return result.rowcount == 1
 
     def get_meeting(self, meeting_id: str, organization_id: str) -> dict | None:
         with closing(self.connect()) as db:

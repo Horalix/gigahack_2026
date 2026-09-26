@@ -167,7 +167,7 @@ fn app_data_dir() -> Result<std::path::PathBuf, String> {
     #[cfg(windows)]
     {
         let app_data = std::env::var_os("APPDATA")
-            .ok_or_else(|| "APPDATA is not set; cannot find Feelsay app data".to_string())?;
+            .ok_or_else(|| "APPDATA is not set; cannot find Notavra app data".to_string())?;
         Ok(std::path::PathBuf::from(app_data).join("app.feelsay.desktop"))
     }
 
@@ -1478,7 +1478,7 @@ fn run_caption_window_child(
                 WS_EX_LAYERED.0 | WS_EX_TOPMOST.0 | WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0,
             ),
             class_name,
-            w!("FeelSay Caption Window"),
+            w!("Notavra Caption Window"),
             WINDOW_STYLE(
                 WS_POPUP.0 | (if hidden_test { 0 } else { WS_VISIBLE.0 }) | WS_THICKFRAME.0,
             ),
