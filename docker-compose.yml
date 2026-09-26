@@ -1,0 +1,66 @@
+# Local mail sink for the meeting-minutes delivery stage.
+#
+# Mailpit accepts SMTP on 1025 and files messages into a web inbox on 8025.
+# It does not forward anything onward unless explicitly configured to (see the
+# egress note below), so minutes never leave this machine.
+#
+#   docker compose up -d
+#   docker compose logs -f mailpit
+#   docker compose down            # add -v to also drop captured mail
+#
+# Inbox: http://127.0.0.1:8025
+
+services:
+  mailpit:
+    # Pinned by tag AND digest. A bare tag can be re-pointed upstream; the digest
+    # makes `up` reproducible and lets it start with no network at all, provided
+    # the image is already in the local store (docker pull once while online).
+    image: axllent/mailpit:v1.31.2@sha256:74d609a42ec279aa63c6b4622a6fa9b5408d1ad5b1d76a1c4be40a265ce0863d
+    container_name: securemom-mailpit
+    restart: unless-stopped
+
+    ports:
+      # Loopback-only. Without the 127.0.0.1 prefix Docker publishes on 0.0.0.0
+      # and punches through the Windows firewall, putting an open SMTP sink and
+      # an unauthenticated web API on the conference Wi-Fi.
+      - "127.0.0.1:1025:1025"   # SMTP   <- the delivery stage submits here
+      - "127.0.0.1:8025:8025"   # web inbox + REST API
+
+    environment:
+      MP_MAX_MESSAGES: 0                 # never evict captured mail mid-demo
+      MP_DATABASE: /data/mailpit.db      # survives container restarts
+
+      # ----------------------------------------------------------------------
+      # EGRESS: deliberately absent, and must stay absent.
+      #
+      # Mailpit CAN send real email. Two separate features do it, both off
+      # unless configured, and both would fail the challenge's security gate:
+      #
+      #   MP_SMTP_RELAY_HOST / MP_SMTP_RELAY_CONFIG   "release" a message to the
+      #     addresses inside it. Manual via the UI's Release button, or automatic
+      #     with MP_SMTP_RELAY_ALL=true / MP_SMTP_RELAY_MATCHING=<regex>.
+      #
+      #   MP_SMTP_FORWARD_HOST + MP_SMTP_FORWARD_TO   copy every incoming
+      #     message to predefined addresses.
+      #
+      # Setting MP_SMTP_RELAY_HOST=smtp.gmail.com with credentials would deliver
+      # real mail to real inboxes. Do not add any MP_SMTP_RELAY_* or
+      # MP_SMTP_FORWARD_* variable here or in an .env file.
+      #
+      # Note: putting this service on a network with `internal: true` blocks
+      # egress at the Docker level, but it also silently drops the port mapping
+      # above (verified: `docker ps` reports no host binding and the host cannot
+      # connect), so the inbox becomes unreachable from the browser. Not usable
+      # while we need to demo the inbox. Prove no-egress with the disconnected
+      # run instead.
+      # ----------------------------------------------------------------------
+
+      # If this is ever exposed beyond loopback, set MP_ALLOWED_HOSTS and
+      # MP_UI_AUTH_FILE — Mailpit logs a warning on start because the API is
+      # otherwise reachable from anything that can route to the interface.
+
+    volumes:
+      - mailpit-data:/data
+
+volumes:
+  mailpit-data:
