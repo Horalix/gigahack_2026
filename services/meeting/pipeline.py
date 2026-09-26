@@ -1,4 +1,4 @@
-"""Checkpointed transcription stage. Later stages extend this pipeline."""
+"""Checkpointed offline transcription and evidence-backed decision pipeline."""
 
 import hashlib
 import json
@@ -59,3 +59,23 @@ def process_job(store: Storage, job: dict, worker_id: str) -> None:
         result = transcribe_audio(decoded, asset, config, progress=progress)
         _write_checkpoint(checkpoint, job, asset, result)
     store.save_segments(job, worker_id, result["segments"])
+
+    if store.get_job_decisions(job["id"], job["organization_id"]) is None:
+        from .decisions import extract_decisions
+
+        if not store.set_job_stage(job["id"], worker_id, "extract"):
+            raise RuntimeError("Job lease lost before local decision extraction")
+        meeting = store.get_meeting(job["meeting_id"], job["organization_id"])
+        if meeting is None:
+            raise RuntimeError("Meeting record is missing")
+        decision_job = {**job, "model_config": json.loads(job["model_config_json"])}
+
+        def decision_progress() -> None:
+            if not store.heartbeat(job["id"], worker_id):
+                raise RuntimeError("Job lease lost during decision extraction")
+
+        decisions = extract_decisions(
+            store.get_segments(job["meeting_id"], job["organization_id"]), meeting,
+            decision_job, store.root / "runtime-tmp", progress=decision_progress,
+        )
+        store.save_decisions(job, worker_id, decisions)

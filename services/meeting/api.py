@@ -201,7 +201,8 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         meeting = meeting_or_404(meeting_id, actor, db)
         return {"meeting": meeting_record(meeting),
                 "asset": asset_record(db.latest_asset(meeting_id, actor["organization_id"])),
-                "segments": [segment_record(row) for row in db.get_segments(meeting_id, actor["organization_id"])]}
+                "segments": [segment_record(row) for row in db.get_segments(meeting_id, actor["organization_id"])],
+                "decisions": db.get_meeting_decisions(meeting_id, actor["organization_id"])}
 
     @app.get("/api/meetings/{meeting_id}/grants")
     def get_meeting_grants(meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
@@ -302,7 +303,7 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         except (ValueError, KeyError, FileNotFoundError) as exc:
             raise ServiceError(422, "PROFILE_UNAVAILABLE", str(exc)) from exc
         try:
-            validate_assets(config, kinds=("asr",))
+            validate_assets(config, kinds=("asr", "llm"))
         except ModelAssetError as exc:
             raise ServiceError(503, "MODEL_NOT_READY", "The selected local ASR model is missing or corrupt") from exc
         return job_record(db.create_or_get_job(meeting_id, actor["organization_id"], asset["id"], config))

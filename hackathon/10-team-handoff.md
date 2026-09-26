@@ -30,7 +30,7 @@ flowchart LR
 
 ## Epics and ownership
 
-This allocation supersedes `Owner: You` in older PBI files. **You = core/inference developer; Affan = product/delivery developer; CEO = presentation.** The remaining developer P0 allocation is 6 PBIs for you and 8 for Affan; CEO owns PBI-024 separately. Affan's existing SMTP work is separate from PBIs.
+This allocation supersedes `Owner:` labels in older PBI files. **You own all service, API, storage, inference and model work. Affan owns all screens and frontend integration, plus his separate SMTP delivery work. CEO owns the pitch and challenge-facing evidence.** PBIs are acceptance units, not exclusive task bundles: backend and UI slices of one PBI can proceed together against a frozen API/fixture contract.
 
 The table below groups PBIs by epic; the files are currently kept together in `hackathon/pbis/` (completed items in `hackathon/pbis/completed/`). They are not physically arranged into per-epic folders.
 
@@ -39,26 +39,26 @@ The table below groups PBIs by epic; the files are currently kept together in `h
 | Foundation | [001](pbis/completed/PBI-001-contracts-and-file-handoff.md), [002](pbis/completed/PBI-002-local-service-and-durable-jobs.md) | You | COMPLETE; consume contracts/service |
 | Models + speech | [003](pbis/completed/PBI-003-model-registry-and-hardware-profiles.md), [004](pbis/PBI-004-gpu-transcription.md) | You | 003 COMPLETE; 004 OPEN for code-switch/accuracy qualification |
 | Trust + patients | [005](pbis/completed/PBI-005-local-access-and-object-isolation.md) | You | COMPLETE in backend; Tauri sign-in integration still needed |
-| Trust + patients | [006](pbis/PBI-006-patients-api-and-pagination.md) | Affan | OPEN; design/module now, integrate after 005 |
-| Doctor workflow | [007](pbis/PBI-007-doctor-dashboard-without-overlay.md), [008](pbis/PBI-008-meeting-upload-and-progress-ui.md) | Affan | OPEN; 007 fixture UI now, 008 integrate after 004/005 |
-| Decisions + document | [009](pbis/PBI-009-local-llm-and-final-decisions.md) | You | OPEN; after 003/004 |
-| Decisions + document | [010](pbis/PBI-010-final-document-and-artifact-handoff.md) | Affan | OPEN; fixture renderer now, real facts after 009 |
+| Trust + patients | [006](pbis/PBI-006-patients-api-and-pagination.md) | You: API; Affan: screens | OPEN; build both against fixtures; PBI-005 backend is ready |
+| Doctor workflow | [007](pbis/PBI-007-doctor-dashboard-without-overlay.md), [008](pbis/PBI-008-meeting-upload-and-progress-ui.md) | Affan: screens; you: service integration | OPEN; dashboard and upload can use existing auth, meeting, upload, job and transcript routes |
+| Decisions + document | [009](pbis/PBI-009-local-llm-and-final-decisions.md) | You | OPEN; fixture implementation can proceed; audio-to-decisions acceptance requires 004 |
+| Decisions + document | [010](pbis/PBI-010-final-document-and-artifact-handoff.md) | You: artifact API/data; Affan: document presentation/handoff | OPEN; agree the output shape after PBI-009 |
 | Live mode | [011](pbis/PBI-011-durable-live-audio-backend.md) | You | OPEN; after 004/005 |
-| Live mode | [012](pbis/PBI-012-live-recording-ui.md) | Affan | OPEN; after 007/011 |
+| Live mode | [012](pbis/PBI-012-live-recording-ui.md) | You: capture API; Affan: screens | OPEN; UI fixture work can start after dashboard shell |
 | Review + privacy | [013](pbis/PBI-013-versioned-transcript-corrections.md), [015](pbis/PBI-015-privacy-retention-and-local-data-controls.md) | You | OPEN; follow 009/010/005 |
-| Review + privacy | [014](pbis/PBI-014-transcript-review-ui.md) | Affan | OPEN; after 008/013 |
-| Release + evidence | [016](pbis/PBI-016-offline-launch-and-packaging.md), [017](pbis/PBI-017-accuracy-and-one-hour-benchmark.md) | Affan | OPEN; final integrated gates, collect fixtures early |
+| Review + privacy | [014](pbis/PBI-014-transcript-review-ui.md) | You: revision API; Affan: review screens | OPEN; fixture UI while PBI-013 is built |
+| Release + evidence | [016](pbis/PBI-016-offline-launch-and-packaging.md), [017](pbis/PBI-017-accuracy-and-one-hour-benchmark.md) | Shared integration; you: model/performance; Affan: app launch | OPEN; collect human references now |
 | Optional P1 | [018](pbis/PBI-018-ai-transcript-flags.md), [019](pbis/PBI-019-speaker-diarization.md) | You | OPEN; only after P0 |
-| Optional P1 | [020](pbis/PBI-020-speaker-name-correction-ui.md) | Affan | OPEN; only after 019 |
+| Optional P1 | [020](pbis/PBI-020-speaker-name-correction-ui.md) | Affan | OPEN; only after backend diarization proves useful |
 | Later P2 / pilot | [021](pbis/PBI-021-optional-voice-enrollment.md), [023](pbis/PBI-023-hospital-deployment-and-eu-scale.md) | You | OPEN; not tonight's demo claim |
 | Later pilot | [022](pbis/PBI-022-eu-pilot-privacy-and-ethics.md) | Affan + CEO | OPEN; human policy approval required |
 | Pitch | [024](pbis/PBI-024-demo-evidence-and-presentation.md) | CEO | OPEN; draft now, final claims from measured gates |
 
 ## Parallel order and file boundaries
 
-1. **Affan now:** PBI-010 standalone HTML renderer and its tests from the synthetic fixture. Confirm with his SMTP code that a local UTF-8 HTML file can be attached. Then PBI-007 dashboard shell and PBI-006 patient module; complete each against real authenticated endpoints when 005 lands. He owns `src/routes/**`, new `src/lib/api/**`, `src/lib/components/meetings/**`, `services/meeting/rendering.py`, `templates/**`, and tests for those slices.
-2. **You now:** finish 004 qualification, then 005 access, 009 grounded decisions, 011/013/015 backend. You own the existing `services/meeting/{api,storage,jobs,pipeline,models,media}.py`, `adapters/**`, `config/profiles/**`, `models/manifest.json`, migrations and contracts.
-3. **Shared boundary:** Affan can write `services/meeting/patients.py` and propose a migration/route patch, but only one developer merges edits to `api.py`, `storage.py`, `contracts/**` and dependency locks at a time. Use an `APIRouter`/small adapter where possible. Affan should not merge fixture-only states as complete.
+1. **Affan now:** build the dashboard shell and upload/progress/transcript screens (PBI-007/008) using fixture mode, then login integration and the existing authenticated API. Continue patient, live-recording and review screens (PBI-006/012/014) against fixtures while backend routes mature. Affan owns all `src/**` UI files and UI tests. SMTP stays in his separate lane.
+2. **You now:** start PBI-009 local decisions using fixture transcripts and the pinned Qwen runtime. Implement evidence links, conservative unknowns, and final-decision reconciliation before connecting output to the API. Keep PBI-004 accuracy OPEN; defer broad tuning until the workflow runs, but preserve the known Romanian/Russian failure as a release risk. Then build PBI-010 artifact API, PBI-011 live backend, PBI-013 revisions and PBI-015 retention. You own `services/meeting/**`, contracts, migrations, model configuration and backend tests.
+3. **Shared boundary:** UI consumes stable HTTP contracts only. For the first vertical slice Affan uses `POST /api/auth/login`, `POST /api/meetings`, `POST /api/meetings/{id}/audio`, `POST /api/meetings/{id}/jobs`, `GET /api/jobs/{id}` and `GET /api/meetings/{id}`. Those routes already exist. He uses fixtures for not-yet-built patient/decision/review/live endpoints. Freeze each new response shape in a fixture before parallel UI integration; only you edit shared API/storage/schema files.
 4. **Artifact interface:** PBI-001 proposes a self-contained UTF-8 HTML file with artifact ID, meeting ID, snapshot revision, opaque local path, MIME, SHA-256 and ready/superseded/revoked state. Affan confirms format and trigger with his SMTP code. `ready` means file generated, not emailed; no patient names in paths. The renderer must escape transcript text and show unknown owner/date explicitly.
 5. **Integration rhythm:** each developer sends a small commit or patch plus changed API shape, targeted test result and PBI status. Merge at dependency boundaries, run an offline upload→ASR→decisions→file→SMTP test, then a one-hour timed run. Keep PBIs OPEN until their acceptance passes.
 

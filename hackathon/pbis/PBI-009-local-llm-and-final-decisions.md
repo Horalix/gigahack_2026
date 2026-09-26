@@ -6,7 +6,7 @@ Priority: P0 — today
 Owner: You  
 Recommended model: **GPT-6 Sol**  
 Recommended reasoning: **High**  
-Depends on: PBI-001, PBI-003, PBI-004
+Depends on: PBI-001 and PBI-003 for fixture/model implementation; PBI-004 for end-to-end audio acceptance
 
 ## Outcome
 
@@ -40,10 +40,17 @@ Gold fixtures for six decision operations, first-person unknown owner, missing d
 
 Automatic diagnosis/orders, second LLM verifier, broad agent framework, optimizing beyond measured bottlenecks.
 
+## Implementation progress (26 September 2026)
+
+- Added an offline, loopback-only llama.cpp server adapter. It loads the model once per job, requires a per-process API key, disables Qwen thinking output, uses JSON Schema constrained output, and does not log prompts or responses.
+- Added bounded transcript batching, candidate extraction followed by cross-batch reconciliation, source quote/revision validation, relative-date preservation, and fail-closed persistence. Unsupported owner/date claims are left unknown; every result requires human review.
+- Integrated decisions into the existing worker and authenticated meeting response; decision records are persisted outside the repository and exposed only for the current transcript revision after the job reaches ready.
+- Synthetic local 4B smoke runs extracted two supported items with verbatim evidence. Outputs varied in whether an explicit "will call" was marked proposed or confirmed; owner attribution was over-broad, and date evidence was omitted. Validators now clear unsupported owner labels and recover only literal, recognized date expressions from cited text. A fixed generation seed is set, but semantic consistency still needs held-out testing. This is not a gold-suite pass.
+- PBI remains OPEN: multilingual gold cases, late amendment/rejection behavior on the real model, prompt-injection case, and a new audio-to-decisions run still need manual qualification. One-hour combined timing is also unmeasured.
+
 ## Completion record
 
 - Commit / changed files: pending
 - Commands and observed behavior: pending
 - Acceptance evidence / limitations: pending
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
-

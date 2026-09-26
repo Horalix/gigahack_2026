@@ -14,9 +14,11 @@ P0 = required today, including user-added patients/live/editing and CEO presenta
 
 ## Start now
 
-1. **You:** PBI-005 access is implemented and tested; continue PBI-004 code-switch/accuracy qualification, then PBI-009 local decisions.
-2. **Affan:** PBI-010 fixture renderer and file handoff on his branch, then PBI-007 dashboard. PBI-006 patient module can be prepared against fixtures; PBI-005 backend access is ready to integrate.
-3. **CEO:** PBI-024 pitch and permitted evaluation references now. The final performance and delivery claims wait for PBI-017 and Affan's integrated SMTP path.
+1. **Core/backend developer:** start PBI-009's local decision pipeline against fixture transcripts and the pinned Qwen runtime. Keep PBI-004 OPEN; use its known code-switch failures as a release risk, then return to focused accuracy work after the first vertical flow works.
+2. **Affan/UI developer:** start the dashboard and upload/progress/transcript screens (PBI-007/008), using the existing authenticated API and fixtures for unfinished routes. He owns all screens and frontend integration, plus his separate SMTP work.
+3. **CEO:** draft the pitch and collect permitted, human-checked evaluation references now. Make performance and delivery claims only after PBI-017 and the integrated SMTP path are measured.
+
+Implementation ownership is horizontal across PBIs: core owns service/API/storage/inference; Affan owns screens. The live handoff lists the current API routes and integration sequence. Freeze a small JSON fixture/response shape before either side consumes a new endpoint; only one developer edits shared contracts, storage and migrations at a time.
 
 ## Model budget rules
 
@@ -41,7 +43,7 @@ Use [the live handoff](../10-team-handoff.md) for the current parallel order. A 
 | [006 — Create a minimal searchable patient directory](PBI-006-patients-api-and-pagination.md) | P0 | Luna / High | 001, 002, 005 | OPEN |
 | [007 — Replace the caption home with the doctor dashboard](PBI-007-doctor-dashboard-without-overlay.md) | P0 | Luna / Medium | 001; integrate 005 and 006 | OPEN |
 | [008 — Connect audio/video upload to real processing](PBI-008-meeting-upload-and-progress-ui.md) | P0 | Luna / Medium | 002, 004, 005; fixture development after 001 | OPEN |
-| [009 — Extract evidence-backed final decisions locally](PBI-009-local-llm-and-final-decisions.md) | P0 | Sol / High | 001, 003, 004 | OPEN |
+| [009 — Extract evidence-backed final decisions locally](PBI-009-local-llm-and-final-decisions.md) | P0 | Sol / High | 001, 003; 004 for audio-to-decisions acceptance | OPEN |
 | [010 — Generate a final document for Affan](PBI-010-final-document-and-artifact-handoff.md) | P0 | Luna / High | 001, 009; fixture rendering can start immediately | OPEN |
 | [011 — Persist live audio and transcribe completed windows](PBI-011-durable-live-audio-backend.md) | P0 | Sol / High | 002, 004, 005 | OPEN |
 | [012 — Record and view live transcripts in the main app](PBI-012-live-recording-ui.md) | P0 | Luna / Medium | 007, 011 | OPEN |
@@ -93,7 +95,7 @@ The graph is a summary; each PBI's dependency list governs. PBI-022 evidence inv
 ## Ownership and integration
 
 - Current developer ownership is in [the live handoff](../10-team-handoff.md); it supersedes old Owner labels in individual PBI files.
-- Affan owns his SMTP code plus the assigned product/delivery PBIs. Coordinate the artifact interface; do not duplicate his mail implementation.
+- Core owns service, API, storage and model/inference work. Affan owns every screen and frontend integration, plus his SMTP code. PBIs remain acceptance units, so some have both owners. Coordinate the artifact interface; do not duplicate his mail implementation.
 - CEO collects permitted/synthetic test material and human references, updates acceptance evidence, checks organizer details, writes pitch and rehearses. CEO/DPO/hospital IT own policy approvals where engineering cannot decide.
 - Contracts/migrations/lockfiles have one owner per session. Other tasks consume frozen fixtures. Integrate through small commits and note interface changes before another branch consumes them.
 

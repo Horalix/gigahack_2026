@@ -12,7 +12,7 @@ from typing import Iterator
 
 
 LEASE_SECONDS = 30
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def default_data_root() -> Path:
@@ -131,6 +131,14 @@ class Storage:
                 db.execute("CREATE INDEX meeting_grants_user ON meeting_grants(organization_id,user_id,meeting_id)")
                 db.execute("CREATE INDEX auth_sessions_user ON auth_sessions(user_id,expires_at)")
                 db.execute("PRAGMA user_version=4")
+            if current < 5:
+                db.execute("""CREATE TABLE decision_results (
+                    job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+                    organization_id TEXT NOT NULL, meeting_id TEXT NOT NULL REFERENCES meetings(id),
+                    transcript_revision INTEGER NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL
+                )""")
+                db.execute("CREATE INDEX decision_results_meeting ON decision_results(meeting_id,transcript_revision,created_at)")
+                db.execute("PRAGMA user_version=5")
 
     def asset_path(self, meeting_id: str, asset_id: str, suffix: str) -> Path:
         # IDs are generated locally; never put an uploaded name into a filesystem path.
@@ -369,6 +377,14 @@ class Storage:
                 (time.time() + LEASE_SECONDS, progress_ms or 0, timestamp(), job_id, worker_id))
             return result.rowcount == 1
 
+    def set_job_stage(self, job_id: str, worker_id: str, stage: str) -> bool:
+        if stage not in {"transcribe", "extract", "validate", "render", "complete"}:
+            raise ValueError("Unsupported job stage")
+        with self.transaction() as db:
+            result = db.execute("UPDATE jobs SET stage=?,updated_at=? WHERE id=? AND state='running' AND lease_owner=?",
+                                (stage, timestamp(), job_id, worker_id))
+            return result.rowcount == 1
+
     def finish_job(self, job_id: str, worker_id: str, state: str, error_code: str | None = None, error_message: str | None = None) -> bool:
         with self.transaction() as db:
             job = db.execute("SELECT * FROM jobs WHERE id=? AND state='running' AND lease_owner=?", (job_id, worker_id)).fetchone()
@@ -424,3 +440,32 @@ class Storage:
                 item["words"] = json.loads(item.pop("words_json"))
                 result.append(item)
             return result
+
+    def save_decisions(self, job: dict, worker_id: str, result: dict) -> None:
+        with self.transaction() as db:
+            lease = db.execute("SELECT lease_owner,state FROM jobs WHERE id=?", (job["id"],)).fetchone()
+            meeting = db.execute("SELECT transcript_revision FROM meetings WHERE id=? AND organization_id=?",
+                                 (job["meeting_id"], job["organization_id"])).fetchone()
+            if not lease or lease["lease_owner"] != worker_id or lease["state"] != "running":
+                raise RuntimeError("Job lease lost before decision commit")
+            if not meeting or result.get("transcriptRevision") != meeting["transcript_revision"]:
+                raise RuntimeError("Decision result does not match the current transcript revision")
+            db.execute("""INSERT INTO decision_results(job_id,organization_id,meeting_id,transcript_revision,result_json,created_at)
+                VALUES(?,?,?,?,?,?) ON CONFLICT(job_id) DO UPDATE SET transcript_revision=excluded.transcript_revision,
+                result_json=excluded.result_json,created_at=excluded.created_at""",
+                (job["id"], job["organization_id"], job["meeting_id"], result["transcriptRevision"],
+                 json.dumps(result, ensure_ascii=False, separators=(",", ":")), timestamp()))
+
+    def get_job_decisions(self, job_id: str, organization_id: str) -> dict | None:
+        with closing(self.connect()) as db:
+            row = db.execute("SELECT result_json FROM decision_results WHERE job_id=? AND organization_id=?",
+                             (job_id, organization_id)).fetchone()
+            return json.loads(row["result_json"]) if row else None
+
+    def get_meeting_decisions(self, meeting_id: str, organization_id: str) -> dict | None:
+        with closing(self.connect()) as db:
+            row = db.execute("""SELECT d.result_json FROM decision_results d JOIN meetings m ON m.id=d.meeting_id
+                JOIN jobs j ON j.id=d.job_id AND j.state='ready'
+                WHERE d.meeting_id=? AND d.organization_id=? AND d.transcript_revision=m.transcript_revision
+                ORDER BY d.created_at DESC,d.job_id DESC LIMIT 1""", (meeting_id, organization_id)).fetchone()
+            return json.loads(row["result_json"]) if row else None

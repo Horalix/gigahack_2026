@@ -232,6 +232,7 @@ def test_parallel_workers_cannot_claim_the_same_gpu_job(tmp_path):
 
 def test_worker_reuses_durable_transcript_after_commit_failure(tmp_path, monkeypatch):
     from services.meeting.adapters import asr
+    from services.meeting import decisions
     from services.meeting.jobs import run_once
 
     api = client(tmp_path, monkeypatch)
@@ -253,7 +254,14 @@ def test_worker_reuses_durable_transcript_after_commit_failure(tmp_path, monkeyp
                  "endMs": 500, "text": "Synthetic speech", "language": "en", "origin": "asr",
                  "words": []}], "metrics": {"wallSeconds": 0.01}}
 
+    def decide(segments, meeting_row, job_row, work_dir, progress=None):
+        if progress:
+            progress()
+        return {"transcriptRevision": segments[0]["transcript_revision"], "modelAlias": "test-llm",
+                "items": [], "requiresHumanReview": True}
+
     monkeypatch.setattr(asr, "transcribe_audio", recognize)
+    monkeypatch.setattr(decisions, "extract_decisions", decide)
     original_save = store.save_segments
 
     def fail_commit(*args):
@@ -270,3 +278,6 @@ def test_worker_reuses_durable_transcript_after_commit_failure(tmp_path, monkeyp
     assert store.get_job(job["id"], org_id)["state"] == "ready"
     assert len(store.get_segments(meeting_id, org_id)) == 1
     assert len(calls) == 1
+    meeting_response = api.get(f"/api/meetings/{meeting_id}")
+    assert meeting_response.status_code == 200
+    assert meeting_response.json()["decisions"]["modelAlias"] == "test-llm"

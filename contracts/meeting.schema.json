@@ -117,8 +117,10 @@
       "required": ["id", "organizationId", "meetingId", "revision", "text", "ownerParticipantId", "dueAt", "originalDateExpression", "status", "taskEvidence", "ownerEvidence", "dateEvidence"],
       "properties": {
         "id": { "$ref": "#/$defs/id" }, "organizationId": { "$ref": "#/$defs/id" }, "meetingId": { "$ref": "#/$defs/id" },
-        "revision": { "type": "integer", "minimum": 0 }, "text": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "revision": { "type": "integer", "minimum": 0 }, "kind": { "enum": ["decision", "action"] },
+        "text": { "type": "string", "minLength": 1, "maxLength": 2000 },
         "ownerParticipantId": { "type": ["string", "null"], "maxLength": 128 }, "dueAt": { "type": ["string", "null"], "format": "date-time" },
+        "ownerLabel": { "type": ["string", "null"], "maxLength": 240 },
         "originalDateExpression": { "type": ["string", "null"], "maxLength": 240 },
         "status": { "enum": ["proposed", "confirmed", "rejected", "cancelled", "unresolved"] },
         "taskEvidence": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evidence" } },
