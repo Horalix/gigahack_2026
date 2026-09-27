@@ -163,6 +163,35 @@ def resolve_profile(
     return snapshot
 
 
+def profile_model_choices(profile_id: str, kind: str) -> list[dict[str, Any]]:
+    """List installed models permitted by a profile for the workbench selector."""
+    if kind not in {"asr", "llm"}:
+        raise ModelConfigurationError(f"Unknown model kind: {kind}")
+    profile = _read_json(_PROFILES / f"{profile_id}.json")
+    manifest = _read_json(_MANIFEST)
+    section = profile.get(kind, {})
+    registry = manifest.get("models", {})
+    root = _model_root()
+    choices = []
+    for alias in profile.get("limits", {}).get(f"allowed_{kind}_models", []):
+        model = registry.get(alias)
+        if (not isinstance(model, dict) or model.get("task") != kind
+                or model.get("backend") != section.get("backend")):
+            continue
+        model_path = root / model["path"]
+        artifacts = [model["artifact"]] if model.get("artifact") else model.get("artifacts", [])
+        present = bool(artifacts) and all(
+            (model_path / item["path"] if not model.get("artifact") else model_path).is_file()
+            for item in artifacts
+        )
+        choices.append({
+            "alias": alias,
+            "label": model.get("display_name", alias),
+            "available": present,
+        })
+    return choices
+
+
 def validate_assets(config: dict[str, Any], kinds: tuple[str, ...] = ("asr", "llm")) -> None:
     """Check selected local files and pinned SHA-256 digests, without network."""
     models = config.get("models")

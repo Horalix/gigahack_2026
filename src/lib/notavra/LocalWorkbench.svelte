@@ -7,7 +7,8 @@
   type Patient = { id: string; displayName: string; hospitalReference: string | null; status: string; canDelete?: boolean; linkedMeetingCount?: number; meetings?: { id: string; title: string; recordedAt: string; status: string }[] };
   type Capture = { id: string; state: string; next_sequence: number; received_bytes: number; error_code?: string | null };
   type DeletionEvent = { actorId: string; actorUsername: string | null; subjectType: string; subjectId: string; action: string; createdAt: string; transcriptRevision: number | null };
-  type Profile = { id: string; hardware: { gpu: string; vram_gb: number }; asrFilesPresent: boolean; llmFilePresent: boolean; compatible: boolean };
+  type ModelChoice = { alias: string; label: string; available: boolean };
+  type Profile = { id: string; hardware: { gpu: string; vram_gb: number }; asrAlias: string; llmAlias: string; asrModels: ModelChoice[]; llmModels: ModelChoice[]; asrFilesPresent: boolean; llmFilePresent: boolean; compatible: boolean };
   type Detail = { meeting: Meeting; permission: string; asset: { durationMs: number; decodeWarning?: string; audioAvailable?: boolean } | null; latestJob?: { id: string; state: string; stage: string; errorCode?: string | null } | null; segments: Segment[]; decisions: any; canUndoCorrection: boolean; captures: Capture[]; artifact: { id: string; sha256: string; approvedAt: string; storageKey: string } | null };
 
   let user = $state<User | null>(null);
@@ -36,6 +37,8 @@
   let patientSearchTimer: ReturnType<typeof setTimeout> | undefined;
   let profiles = $state<Profile[]>([]);
   let profileId = $state("laptop8");
+  let asrModelAlias = $state("");
+  let llmModelAlias = $state("");
   let language = $state("ro");
   let busy = $state(false);
   let status = $state("");
@@ -195,6 +198,19 @@
     if (result.defaultProfileId && result.profiles.some((profile) => profile.id === result.defaultProfileId && profile.compatible)) {
       profileId = result.defaultProfileId;
     }
+    selectProfileModels();
+  }
+
+  function selectProfileModels() {
+    const profile = profiles.find((item) => item.id === profileId);
+    asrModelAlias = profile?.asrModels.find((item) => item.alias === profile.asrAlias && item.available)?.alias
+      ?? profile?.asrModels.find((item) => item.available)?.alias ?? "";
+    llmModelAlias = profile?.llmModels.find((item) => item.alias === profile.llmAlias && item.available)?.alias
+      ?? profile?.llmModels.find((item) => item.available)?.alias ?? "";
+  }
+
+  function jobModelOptions() {
+    return { profileId, language, asrModelAlias, llmModelAlias };
   }
 
   async function openMeeting(id: string) {
@@ -549,7 +565,7 @@
       const asset = await request<{ id: string }>(`/meetings/${detail.meeting.id}/audio`, { method: "POST", body: payload });
       status = "Starting local transcription and decision extraction…";
       const job = await request<{ id: string }>(`/meetings/${detail.meeting.id}/jobs`, {
-        method: "POST", body: JSON.stringify({ profileId, language }),
+        method: "POST", body: JSON.stringify(jobModelOptions()),
       });
       void asset;
       watchJob(job.id);
@@ -561,7 +577,7 @@
     busy = true; error = ""; status = "Re-running local transcription and decision extraction…";
     try {
       const job = await request<{ id: string }>(`/meetings/${detail.meeting.id}/jobs`, {
-        method: "POST", body: JSON.stringify({ profileId, language }),
+        method: "POST", body: JSON.stringify(jobModelOptions()),
       });
       watchJob(job.id);
     } catch (e) { error = e instanceof Error ? e.message : "Processing could not start"; status = ""; busy = false; }
@@ -632,7 +648,7 @@
     const startMs = Math.round(startSample * 1000 / 16000);
     const durationMs = Math.round(samples.length * 1000 / 16000);
     const endMs = startMs + durationMs;
-    const params = new URLSearchParams({ profileId, language, start_ms: String(startMs),
+    const params = new URLSearchParams({ profileId, language, asrModelAlias, start_ms: String(startMs),
       ownershipStartMs: String(startMs), ownershipEndMs: String(Math.min(ownedEndMs, endMs)) });
     try {
       const result = await request<{ segments: Segment[]; wallSeconds: number }>(`/captures/${sessionId}/preview?${params}`, {
@@ -765,7 +781,7 @@
     try {
       await request(`/captures/${sessionId}/seal`, { method: "POST", body: JSON.stringify({ expectedSequenceCount: nextCaptureSequence }) });
       const job = await request<{ id: string }>(`/meetings/${detail?.meeting.id}/jobs`, {
-        method: "POST", body: JSON.stringify({ profileId, language }),
+        method: "POST", body: JSON.stringify(jobModelOptions()),
       });
       captureId = undefined; watchJob(job.id);
     } catch (e) { error = e instanceof Error ? e.message : "Recording could not be sealed"; status = ""; busy = false; }
@@ -777,7 +793,7 @@
     try {
       await request(`/captures/${capture.id}/seal`, { method: "POST", body: JSON.stringify({ expectedSequenceCount: capture.next_sequence }) });
       const job = await request<{ id: string }>(`/meetings/${detail.meeting.id}/jobs`, {
-        method: "POST", body: JSON.stringify({ profileId, language }),
+        method: "POST", body: JSON.stringify(jobModelOptions()),
       });
       watchJob(job.id);
     } catch (e) { error = e instanceof Error ? e.message : "Saved audio could not be processed"; status = ""; busy = false; }
@@ -866,9 +882,11 @@
           {#each detail.captures as capture (capture.id)}<section class="panel"><h2>Unfinished microphone capture</h2><p>Only acknowledged chunks were saved ({(capture.received_bytes / 1048576).toFixed(1)} MB). The last part of speech may be missing. Process the saved portion or discard it.</p><div class="downloads"><button class="primary" disabled={busy || !capture.next_sequence} onclick={() => processSavedCapture(capture)}>Process saved portion</button><button class="quiet" disabled={busy} onclick={() => discardSavedCapture(capture)}>Discard saved chunks</button></div></section>{/each}
           <section class="panel"><h2>Add recording</h2><p>Upload audio or video, or record through the microphone. Live words are provisional; after Stop, local ASR fills skipped windows from the saved recording.</p><div class="live-record"><button class:recording class="quiet" type="button" onclick={() => recording ? stopRecording() : startRecording()} disabled={busy}>{recording ? "Stop recording" : "● Record live"}</button>{#if recording}<span class="record-indicator"><i></i> Recording · {formatElapsed(recordingSeconds)}<label class="record-health">Microphone level <meter min="0" max="1" value={microphoneLevel}></meter></label><small>{acknowledgedCaptureChunks} {acknowledgedCaptureChunks === 1 ? "chunk" : "chunks"} saved · {pendingChunkUploads} pending</small></span>{/if}</div>{#if livePreviewStatus}<p role="status" class="status">{livePreviewStatus}</p>{/if}{#if liveSegments.length}<section class="panel live-transcript"><h3>Live transcript <span>Provisional</span></h3><div class="transcript">{#each liveSegments as segment (segment.id)}<p><time>{formatTime(segment.startMs)}</time><span>{segment.text}</span><small>{segment.language}</small></p>{/each}</div></section>{/if}<form class="upload-form" onsubmit={upload}>
             <label class="file-input">Recording file<input name="audio" type="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.mp4,.mov,.webm" required /></label>
-            <label>Hardware profile<select bind:value={profileId}>{#each profiles as p (p.id)}<option value={p.id} disabled={!p.compatible}>{p.id === "laptop8" ? "Laptop · RTX 3070 Ti · 8 GB" : p.id === "hospital16" ? "Workstation · RTX 5080 · 16 GB" : p.id} {!p.compatible ? "· unavailable on this computer" : p.asrFilesPresent && p.llmFilePresent ? "· ready" : "· models missing"}</option>{/each}</select></label>
+            <label>Hardware profile<select bind:value={profileId} onchange={selectProfileModels}>{#each profiles as p (p.id)}<option value={p.id} disabled={!p.compatible}>{p.id === "laptop8" ? "Laptop · RTX 3070 Ti · 8 GB" : p.id === "hospital16" ? "Workstation · RTX 5080 · 16 GB" : p.id} {!p.compatible ? "· unavailable on this computer" : p.asrFilesPresent && p.llmFilePresent ? "· ready" : "· models missing"}</option>{/each}</select></label>
+            <label>Speech model<select bind:value={asrModelAlias}>{#each profiles.find((p) => p.id === profileId)?.asrModels ?? [] as model (model.alias)}<option value={model.alias} disabled={!model.available}>{model.label}{model.available ? "" : " · not installed"}</option>{/each}</select></label>
+            <label>Decisions model<select bind:value={llmModelAlias}>{#each profiles.find((p) => p.id === profileId)?.llmModels ?? [] as model (model.alias)}<option value={model.alias} disabled={!model.available}>{model.label}{model.available ? "" : " · not installed"}</option>{/each}</select></label>
             <label>ASR language<select bind:value={language}><option value="ro">Romanian</option><option value="ru">Russian</option><option value="en">English</option><option value="auto">Auto-detect</option></select></label>
-            <button class="primary" disabled={busy || recording || !profiles.find((p) => p.id === profileId)?.asrFilesPresent || !profiles.find((p) => p.id === profileId)?.llmFilePresent}>{busy ? "Processing…" : "Transcribe recording"}</button>
+            <button class="primary" disabled={busy || recording || !asrModelAlias || !llmModelAlias || !profiles.find((p) => p.id === profileId)?.asrFilesPresent || !profiles.find((p) => p.id === profileId)?.llmFilePresent}>{busy ? "Processing…" : "Transcribe recording"}</button>
           </form>{#if status}<p role="status" class="status">{status}</p>{/if}</section>
           {#if detail.asset && detail.asset.audioAvailable !== false}<audio class="audio-review" controls preload="none" src={`/api/meetings/${detail.meeting.id}/audio`}>Audio playback is unavailable in this browser.</audio>{/if}
           {#if detail.segments.length}<section class="panel"><div class="panel-head"><h2>Transcript <span>{detail.segments.length} passages · click edit to correct</span></h2><div class="downloads">{#if detail.canUndoCorrection && user.role !== "reviewer"}<button class="quiet" onclick={undoLastCorrection}>Undo last correction</button>{/if}<button class="quiet" onclick={() => downloadTranscript("txt")}>TXT</button><button class="quiet" onclick={() => downloadTranscript("json")}>JSON</button></div></div>

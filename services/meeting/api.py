@@ -585,7 +585,7 @@ def create_app(data_root: Path | None = None) -> FastAPI:
 
     @app.get("/api/profiles")
     def get_profiles(actor: dict = Depends(principal)):
-        from .models import resolve_profile
+        from .models import profile_model_choices, resolve_profile
         gpu_memory = host_gpu_memory_gb()
         gpu_free_memory = host_gpu_free_memory_gb()
         available_ram = host_available_memory_gb()
@@ -610,6 +610,8 @@ def create_app(data_root: Path | None = None) -> FastAPI:
             choices.append({"id": profile_id, "hardware": config["hardware"],
                             "asrAlias": config["models"]["asr"]["alias"],
                             "llmAlias": config["models"]["llm"]["alias"],
+                            "asrModels": profile_model_choices(profile_id, "asr"),
+                            "llmModels": profile_model_choices(profile_id, "llm"),
                             "compatible": compatible, "hostVramGb": gpu_memory,
                             "hostFreeVramGb": gpu_free_memory,
                             "hostAvailableRamGb": available_ram, "requiredAvailableRamGb": required_ram,
@@ -732,6 +734,7 @@ def create_app(data_root: Path | None = None) -> FastAPI:
     @app.post("/api/captures/{capture_id}/preview")
     async def preview_capture_window(capture_id: str, request: Request,
                                      profile_id: str = Query(alias="profileId"),
+                                     asr_model_alias: str | None = Query(default=None, alias="asrModelAlias"),
                                      language: str = Query(), start_ms: int = Query(ge=0),
                                      ownership_start_ms: int = Query(alias="ownershipStartMs", ge=0),
                                      ownership_end_ms: int = Query(alias="ownershipEndMs", gt=0),
@@ -768,7 +771,8 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         from .models import ModelAssetError, validate_assets, resolve_profile
         from .adapters.asr import ASRError, asr_configuration_hash, transcribe_audio
         try:
-            config = resolve_profile(profile_id, overrides={"asr": {"language": language}})
+            config = resolve_profile(profile_id, asr_alias=asr_model_alias,
+                                      overrides={"asr": {"language": language}})
             minimum_ram = float(config.get("limits", {}).get("min_available_ram_gb", 8))
             available_ram = host_available_memory_gb()
             if available_ram is None or available_ram < minimum_ram:

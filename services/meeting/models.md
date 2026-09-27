@@ -15,6 +15,8 @@ Precedence is explicit job profile/model/settings, persisted UI profile (passed 
 
 `POST /api/meetings/{id}/jobs` accepts `profileId`, `asrModelAlias`, and `llmModelAlias` for the next job. The service records the resolved profile in that job; changing environment defaults or a UI selection afterward does not change work already queued.
 
+`GET /api/profiles` returns per-profile `asrModels` and `llmModels` choices filtered by profile allowlists, backend compatibility, and local asset presence. The workbench sends selected aliases with uploads, reprocessing, and live ASR previews. `MOM_ASR_MODEL` and `MOM_LLM_MODEL` remain the defaults; explicit job selections take precedence. The current profiles expose Whisper large-v3 and Qwen3.5 4B only.
+
 Prepare model files only through the explicit online setup command:
 
 ```powershell

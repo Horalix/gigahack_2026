@@ -3,6 +3,7 @@
   "model_root_env": "MOM_MODEL_ROOT",
   "models": {
     "whisper-large-v3-local": {
+      "display_name": "Whisper large-v3",
       "task": "asr",
       "backend": "faster_whisper",
       "path": "asr/whisper-large-v3",
@@ -22,6 +23,7 @@
       "status": "candidate_not_runtime_qualified"
     },
     "qwen35-4b-q4km-local": {
+      "display_name": "Qwen3.5 4B Q4_K_M",
       "task": "llm",
       "backend": "llama_cpp",
       "path": "llm/Qwen3.5-4B-Q4_K_M.gguf",
