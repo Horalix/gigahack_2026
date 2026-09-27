@@ -14,7 +14,7 @@ class CreateMeeting(BaseModel):
     recordedAt: datetime
     timeZone: str = Field(min_length=1, max_length=64)
     outputLanguage: Literal["ro", "ru", "en"]
-    patientLinkIds: list[str] = Field(default_factory=list)
+    patientLinkIds: list[str] = Field(default_factory=list, max_length=50)
     meetingType: str | None = Field(default=None, max_length=80)
 
     @field_validator("recordedAt")
@@ -74,6 +74,22 @@ class GrantMeetingAccess(BaseModel):
 
     userId: str = Field(min_length=1, max_length=128)
     permission: Literal["editor", "viewer"]
+
+
+class CreatePatient(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    displayName: str = Field(min_length=1, max_length=160)
+    hospitalReference: str | None = Field(default=None, max_length=120)
+    status: Literal["active", "inactive"] = "active"
+
+
+class UpdatePatient(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    displayName: str | None = Field(default=None, min_length=1, max_length=160)
+    hospitalReference: str | None = Field(default=None, max_length=120)
+    status: Literal["active", "inactive"] | None = None
 
 
 class ErrorEnvelope(BaseModel):

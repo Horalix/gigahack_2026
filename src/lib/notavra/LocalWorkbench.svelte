@@ -4,6 +4,7 @@
   type User = { id: string; username: string; role: string };
   type Meeting = { id: string; title: string; recordedAt: string; status: string; outputLanguage: string; transcriptRevision: number };
   type Segment = { id: string; startMs: number; endMs: number; text: string; language: string };
+  type Patient = { id: string; displayName: string; hospitalReference: string | null; status: string; meetings?: { id: string; title: string; recordedAt: string; status: string }[] };
   type Profile = { id: string; hardware: { gpu: string; vram_gb: number }; asrFilesPresent: boolean; llmFilePresent: boolean; compatible: boolean };
   type Detail = { meeting: Meeting; asset: { durationMs: number; decodeWarning?: string } | null; segments: Segment[]; decisions: any };
 
@@ -17,6 +18,14 @@
   let query = $state("");
   let offset = $state(0);
   let detail = $state<Detail | null>(null);
+  let directoryView = $state(false);
+  let patients = $state<Patient[]>([]);
+  let patientTotal = $state(0);
+  let patientCursor = $state<string | null>(null);
+  let patientHasMore = $state(false);
+  let patientQuery = $state("");
+  let selectedPatient = $state<Patient | null>(null);
+  let patientSearchTimer: ReturnType<typeof setTimeout> | undefined;
   let profiles = $state<Profile[]>([]);
   let profileId = $state("laptop8");
   let language = $state("ro");
@@ -78,6 +87,31 @@
     total = result.total;
   }
 
+  async function loadPatients(cursor?: string, append = false) {
+    const params = new URLSearchParams({ limit: "25", q: patientQuery });
+    if (cursor) params.set("cursor", cursor);
+    const result = await request<{ patients: Patient[]; total: number; nextCursor: string | null; hasMore: boolean }>(`/patients?${params}`);
+    patients = append ? [...patients, ...result.patients] : result.patients;
+    patientTotal = result.total; patientCursor = result.nextCursor; patientHasMore = result.hasMore;
+  }
+
+  async function openPatient(patientId: string) {
+    const result = await request<{ patient: Patient }>(`/patients/${patientId}`);
+    selectedPatient = result.patient;
+  }
+
+  async function createPatient(event: SubmitEvent) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget as HTMLFormElement);
+    try {
+      const result = await request<{ patient: Patient }>("/patients", { method: "POST", body: JSON.stringify({
+        displayName: String(form.get("displayName")), hospitalReference: String(form.get("hospitalReference") || "") || null,
+      }) });
+      selectedPatient = result.patient; await loadPatients();
+      (event.currentTarget as HTMLFormElement).reset();
+    } catch (e) { showError(e); }
+  }
+
   async function loadProfiles() {
     const result = await request<{ profiles: Profile[] }>("/profiles");
     profiles = result.profiles;
@@ -121,7 +155,7 @@
       const meeting = await request<Meeting>("/meetings", { method: "POST", body: JSON.stringify({
         contractVersion: "1.0", title: String(form.get("title")),
         recordedAt: new Date().toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        outputLanguage: language === "auto" ? "ro" : language, patientLinkIds: [], meetingType: "Clinical consultation",
+        outputLanguage: language === "auto" ? "ro" : language, patientLinkIds: selectedPatient ? [selectedPatient.id] : [], meetingType: "Clinical consultation",
       }) });
       await loadMeetings(); await openMeeting(meeting.id);
     } catch (e) { error = e instanceof Error ? e.message : "Could not create meeting"; }
@@ -199,13 +233,14 @@
 
   function stopPolling() { if (progressTimer) clearInterval(progressTimer); progressTimer = undefined; }
   function searchChanged() { offset = 0; if (searchTimer) clearTimeout(searchTimer); searchTimer = setTimeout(() => void loadMeetings().catch(showError), 250); }
+  function patientSearchChanged() { if (patientSearchTimer) clearTimeout(patientSearchTimer); patientSearchTimer = setTimeout(() => { selectedPatient = null; void loadPatients().catch(showError); }, 250); }
   function showError(e: unknown) { error = e instanceof Error ? e.message : "Request failed"; }
   function formatTime(ms: number) { return new Date(ms).toISOString().slice(11, 19); }
   function formatElapsed(seconds: number) { return `${String(Math.floor(seconds / 3600)).padStart(2,"0")}:${String(Math.floor(seconds / 60) % 60).padStart(2,"0")}:${String(seconds % 60).padStart(2,"0")}`; }
-  async function logout() { await request("/auth/logout", { method: "POST" }); user = null; detail = null; await initialize(); }
+  async function logout() { await request("/auth/logout", { method: "POST" }); user = null; detail = null; selectedPatient = null; patients = []; await initialize(); }
 
   onMount(() => { void initialize(); });
-  onDestroy(() => { stopPolling(); stopRecording(); mediaStream?.getTracks().forEach((track) => track.stop()); if (searchTimer) clearTimeout(searchTimer); });
+  onDestroy(() => { stopPolling(); stopRecording(); mediaStream?.getTracks().forEach((track) => track.stop()); if (searchTimer) clearTimeout(searchTimer); if (patientSearchTimer) clearTimeout(patientSearchTimer); });
 </script>
 
 <svelte:head><title>Notavra · Clinical workspace</title></svelte:head>
@@ -225,15 +260,21 @@
   </main>
 {:else}
   <main class="workspace">
-    <header><div><img src="/brand/symbol.svg" alt="" /><span><b>Notavra</b><small>LOCAL CLINICAL WORKSPACE</small></span></div><span>{user.username} · {user.role}</span><button class="quiet" onclick={logout}>Sign out</button></header>
+    <header><div><img src="/brand/symbol.svg" alt="" /><span><b>Notavra</b><small>LOCAL CLINICAL WORKSPACE</small></span></div><nav><button class:chosen={!directoryView} class="quiet" onclick={() => { directoryView = false; }}>Meetings</button><button class:chosen={directoryView} class="quiet" onclick={() => { directoryView = true; selectedPatient = null; loadPatients().catch(showError); }}>Patients</button></nav><span>{user.username} · {user.role}</span><button class="quiet" onclick={logout}>Sign out</button></header>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
+    {#if directoryView}
+      <div class="columns">
+        <aside><div class="panel-head"><h2>Patients</h2><span class="muted">{patientTotal} records</span></div><input aria-label="Search patients" placeholder="Name or hospital reference" bind:value={patientQuery} oninput={patientSearchChanged} /><ul class="meeting-list">{#each patients as patient (patient.id)}<li><button class:chosen={selectedPatient?.id === patient.id} onclick={() => openPatient(patient.id).catch(showError)}><b>{patient.displayName}</b><small>{patient.hospitalReference || "No hospital reference"} · {patient.status}</small></button></li>{/each}</ul>{#if patientHasMore}<button class="quiet" onclick={() => patientCursor && loadPatients(patientCursor, true).catch(showError)}>Show more</button>{/if}<form class="new-meeting" onsubmit={createPatient}><h3>Add patient</h3><label>Name<input name="displayName" required maxlength="160" /></label><label>Hospital reference<input name="hospitalReference" maxlength="120" /></label><button class="primary">Save patient</button></form></aside>
+        <section class="content">{#if selectedPatient}<div class="panel-head"><div><p class="eyebrow">Patient record</p><h1>{selectedPatient.displayName}</h1><p class="muted">{selectedPatient.hospitalReference || "No hospital reference"} · {selectedPatient.status}</p></div><button class="primary" onclick={() => { directoryView = false; detail = null; }}>Start linked meeting</button></div><section class="panel"><h2>Linked meetings</h2>{#if selectedPatient.meetings?.length}<ul class="meeting-list">{#each selectedPatient.meetings as meeting (meeting.id)}<li><button onclick={() => { directoryView = false; openMeeting(meeting.id).catch(showError); }}><b>{meeting.title}</b><small>{new Date(meeting.recordedAt).toLocaleString()} · {meeting.status}</small></button></li>{/each}</ul>{:else}<p>No meetings are linked to this patient.</p>{/if}</section>{:else}<div class="empty"><span>02</span><h1>Patient directory</h1><p>Search by name or local hospital reference, or add a minimal patient record.</p></div>{/if}</section>
+      </div>
+    {:else}
     <div class="columns">
       <aside>
         <div class="panel-head"><h2>Meetings</h2><button class="quiet" onclick={() => { detail = null; }}>New</button></div>
         <input aria-label="Search meetings" placeholder="Search meetings" bind:value={query} oninput={searchChanged} />
         <ul class="meeting-list">{#each meetings as item (item.id)}<li><button class:chosen={detail?.meeting.id === item.id} onclick={() => openMeeting(item.id).catch(showError)}><b>{item.title}</b><small>{new Date(item.recordedAt).toLocaleString()} · {item.status}</small></button></li>{/each}</ul>
         <div class="pager"><button disabled={offset === 0} onclick={() => { offset = Math.max(0, offset - 10); loadMeetings().catch(showError); }}>←</button><span>{total ? offset + 1 : 0}–{Math.min(offset + 10, total)} of {total}</span><button disabled={offset + 10 >= total} onclick={() => { offset += 10; loadMeetings().catch(showError); }}>→</button></div>
-        {#if !detail}<form class="new-meeting" onsubmit={createMeeting}><h3>Start a meeting</h3><label>Meeting title<input name="title" required maxlength="240" placeholder="Patient consultation" /></label><label>Transcript language<select bind:value={language}><option value="ro">Romanian</option><option value="ru">Russian</option><option value="en">English</option><option value="auto">Auto-detect</option></select></label><button class="primary" disabled={busy}>Create meeting</button></form>{/if}
+        {#if !detail}<form class="new-meeting" onsubmit={createMeeting}><h3>Start a meeting</h3>{#if selectedPatient}<small>Will be linked to {selectedPatient.displayName} <button type="button" class="edit-button" onclick={() => (selectedPatient = null)}>Remove link</button></small>{/if}<label>Meeting title<input name="title" required maxlength="240" placeholder="Patient consultation" /></label><label>Transcript language<select bind:value={language}><option value="ro">Romanian</option><option value="ru">Russian</option><option value="en">English</option><option value="auto">Auto-detect</option></select></label><button class="primary" disabled={busy}>Create meeting</button></form>{/if}
       </aside>
       <section class="content">
         {#if detail}
@@ -251,6 +292,7 @@
         {:else}<div class="empty"><span>01</span><h1>Clinical meetings, ready to review</h1><p>Choose a meeting, or start one and upload its audio. Transcription and action extraction run locally on the selected profile.</p></div>{/if}
       </section>
     </div>
+    {/if}
     <footer>Local inference · No runtime cloud calls · Verify every transcript and action before clinical use</footer>
   </main>
 {/if}

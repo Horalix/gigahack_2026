@@ -12,7 +12,7 @@ from typing import Iterator
 
 
 LEASE_SECONDS = 30
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def default_data_root() -> Path:
@@ -148,6 +148,25 @@ class Storage:
                 )""")
                 db.execute("CREATE INDEX segment_revisions_meeting ON segment_revisions(meeting_id,created_at)")
                 db.execute("PRAGMA user_version=6")
+            if current < 7:
+                db.execute("""CREATE TABLE patients (
+                    id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL, search_name TEXT NOT NULL,
+                    hospital_reference TEXT, search_reference TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL CHECK(status IN ('active','inactive')),
+                    created_by TEXT NOT NULL REFERENCES users(id),
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                )""")
+                db.execute("CREATE INDEX patients_org_name ON patients(organization_id,search_name,id)")
+                db.execute("CREATE INDEX patients_org_reference ON patients(organization_id,search_reference,id)")
+                db.execute("""CREATE TABLE patient_meetings (
+                    patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+                    meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+                    organization_id TEXT NOT NULL, linked_by TEXT NOT NULL REFERENCES users(id),
+                    created_at TEXT NOT NULL, PRIMARY KEY(patient_id,meeting_id)
+                )""")
+                db.execute("CREATE INDEX patient_meetings_meeting ON patient_meetings(organization_id,meeting_id,patient_id)")
+                db.execute("PRAGMA user_version=7")
 
     def asset_path(self, meeting_id: str, asset_id: str, suffix: str) -> Path:
         # IDs are generated locally; never put an uploaded name into a filesystem path.
@@ -183,7 +202,26 @@ class Storage:
                 (meeting_id,organization_id,user_id,permission,granted_by,created_at)
                 VALUES(?,?,?,'owner',?,?)""",
                 (row["id"], row["organization_id"], principal["id"], principal["id"], now))
+            for patient_id in dict.fromkeys(data.get("patientLinkIds", [])):
+                patient = db.execute("""SELECT p.id FROM patients p WHERE p.id=? AND p.organization_id=? AND
+                    (p.created_by=? OR EXISTS (SELECT 1 FROM patient_meetings pm
+                      JOIN meeting_grants mg ON mg.meeting_id=pm.meeting_id AND mg.organization_id=pm.organization_id
+                      WHERE pm.patient_id=p.id AND pm.organization_id=p.organization_id
+                        AND mg.user_id=? AND mg.organization_id=?))""",
+                    (patient_id, row["organization_id"], principal["id"], principal["id"],
+                     row["organization_id"])).fetchone()
+                if not patient:
+                    raise ValueError("A selected patient is unavailable")
+                db.execute("""INSERT INTO patient_meetings
+                    (patient_id,meeting_id,organization_id,linked_by,created_at) VALUES(?,?,?,?,?)""",
+                    (patient_id, row["id"], row["organization_id"], principal["id"], now))
         return row
+
+    def meeting_patient_ids(self, meeting_id: str, organization_id: str) -> list[str]:
+        with closing(self.connect()) as db:
+            rows = db.execute("SELECT patient_id FROM patient_meetings WHERE meeting_id=? AND organization_id=? ORDER BY patient_id",
+                              (meeting_id, organization_id)).fetchall()
+            return [row["patient_id"] for row in rows]
 
     def installation_organization(self) -> str:
         with closing(self.connect()) as db:

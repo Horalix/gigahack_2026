@@ -15,8 +15,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import AuthService, SESSION_COOKIE, SESSION_SECONDS
-from .contracts import CreateAccount, CreateJob, CreateMeeting, ErrorEnvelope, GrantMeetingAccess, LoginRequest, ReviseSegment, SetAccountActive, SetupRequest
+from .contracts import CreateAccount, CreateJob, CreateMeeting, CreatePatient, ErrorEnvelope, GrantMeetingAccess, LoginRequest, ReviseSegment, SetAccountActive, SetupRequest, UpdatePatient
 from .media import MAX_UPLOAD_BYTES, MediaError, decode
+from .patients import PatientDirectory
 from .storage import Storage
 
 
@@ -35,11 +36,11 @@ class ServiceError(Exception):
         self.retryable = retryable
 
 
-def meeting_record(row: dict) -> dict:
+def meeting_record(row: dict, patient_link_ids: list[str] | None = None) -> dict:
     return {"id": row["id"], "organizationId": row["organization_id"],
             "title": row["title"], "recordedAt": row["recorded_at"], "timeZone": row["time_zone"],
             "meetingType": row["meeting_type"], "suggestedMeetingType": None,
-            "outputLanguage": row["output_language"], "patientLinkIds": [], "participantIds": [],
+            "outputLanguage": row["output_language"], "patientLinkIds": patient_link_ids or [], "participantIds": [],
             "status": row["status"], "transcriptRevision": row["transcript_revision"],
             "createdAt": row["created_at"], "updatedAt": row["updated_at"]}
 
@@ -215,28 +216,81 @@ def create_app(data_root: Path | None = None) -> FastAPI:
     def health(db: Storage = Depends(store)):
         return {"status": "ok", "service": "meeting", "setupRequired": db.user_count() == 0}
 
+    @app.get("/api/patients")
+    def list_patients(q: str = Query(default="", max_length=120), limit: int = Query(default=25, ge=1, le=100),
+                      cursor: str | None = Query(default=None, max_length=1024),
+                      actor: dict = Depends(principal), db: Storage = Depends(store)):
+        try:
+            return PatientDirectory(db).list(actor, query=q, limit=limit, cursor=cursor)
+        except ValueError as exc:
+            raise ServiceError(422, "PATIENT_CURSOR_INVALID", str(exc)) from exc
+
+    @app.post("/api/patients", status_code=201)
+    def create_patient(data: CreatePatient, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        if actor["role"] == "reviewer":
+            raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot create patients")
+        try:
+            return {"patient": PatientDirectory(db).create(actor, data.displayName, data.hospitalReference, data.status)}
+        except ValueError as exc:
+            raise ServiceError(422, "PATIENT_INVALID", str(exc)) from exc
+
+    @app.get("/api/patients/{patient_id}")
+    def get_patient(patient_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        patient = PatientDirectory(db).get(actor, patient_id)
+        if not patient:
+            raise ServiceError(404, "PATIENT_NOT_FOUND", "Patient not found")
+        return {"patient": patient}
+
+    @app.patch("/api/patients/{patient_id}")
+    def update_patient(patient_id: str, data: UpdatePatient, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        if actor["role"] == "reviewer":
+            raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot edit patients")
+        names = {"displayName": "display_name", "hospitalReference": "hospital_reference", "status": "status"}
+        changes = {names[key]: getattr(data, key) for key in data.model_fields_set}
+        try:
+            patient = PatientDirectory(db).update(actor, patient_id, changes)
+        except (TypeError, ValueError) as exc:
+            raise ServiceError(422, "PATIENT_INVALID", str(exc)) from exc
+        if not patient:
+            raise ServiceError(404, "PATIENT_NOT_FOUND", "Patient not found")
+        return {"patient": patient}
+
+    @app.post("/api/patients/{patient_id}/meetings/{meeting_id}", status_code=201)
+    def link_patient_meeting(patient_id: str, meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        if not PatientDirectory(db).link_meeting(actor, patient_id, meeting_id, linked=True):
+            raise ServiceError(404, "PATIENT_OR_MEETING_NOT_FOUND", "Patient or meeting not found")
+        return {"patientId": patient_id, "meetingId": meeting_id, "linked": True}
+
+    @app.delete("/api/patients/{patient_id}/meetings/{meeting_id}")
+    def unlink_patient_meeting(patient_id: str, meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        if not PatientDirectory(db).link_meeting(actor, patient_id, meeting_id, linked=False):
+            raise ServiceError(404, "PATIENT_OR_MEETING_NOT_FOUND", "Patient or meeting not found")
+        return {"patientId": patient_id, "meetingId": meeting_id, "linked": False}
+
     @app.post("/api/meetings", status_code=201)
     def create_meeting(data: CreateMeeting, actor: dict = Depends(principal), db: Storage = Depends(store)):
         if actor["role"] == "reviewer":
             raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot create meetings")
-        if data.patientLinkIds:
-            raise ServiceError(422, "PATIENT_LINKS_UNAVAILABLE", "Patient links require the access service")
         item = data.model_dump()
         item["recordedAt"] = data.recordedAt.isoformat()
-        return meeting_record(db.create_meeting(actor, item))
+        try:
+            meeting = db.create_meeting(actor, item)
+        except ValueError as exc:
+            raise ServiceError(422, "PATIENT_LINK_INVALID", "A selected patient is unavailable") from exc
+        return meeting_record(meeting, db.meeting_patient_ids(meeting["id"], actor["organization_id"]))
 
     @app.get("/api/meetings")
     def list_meetings(q: str = "", limit: int = Query(default=20, ge=1, le=100),
                       offset: int = Query(default=0, ge=0), actor: dict = Depends(principal),
                       db: Storage = Depends(store)):
         rows, total = db.list_meetings(actor["id"], actor["organization_id"], query=q, limit=limit, offset=offset)
-        return {"meetings": [meeting_record(row) for row in rows], "total": total,
+        return {"meetings": [meeting_record(row, db.meeting_patient_ids(row["id"], actor["organization_id"])) for row in rows], "total": total,
                 "limit": limit, "offset": offset}
 
     @app.get("/api/meetings/{meeting_id}")
     def get_meeting(meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
         meeting = meeting_or_404(meeting_id, actor, db)
-        return {"meeting": meeting_record(meeting),
+        return {"meeting": meeting_record(meeting, db.meeting_patient_ids(meeting_id, actor["organization_id"])),
                 "asset": asset_record(db.latest_asset(meeting_id, actor["organization_id"])),
                 "segments": [segment_record(row) for row in db.get_segments(meeting_id, actor["organization_id"])],
                 "decisions": db.get_meeting_decisions(meeting_id, actor["organization_id"])}

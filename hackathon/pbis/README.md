@@ -40,7 +40,7 @@ Use [the live handoff](../10-team-handoff.md) for the current parallel order. A 
 | [003 — Prepare local model registry and 8/16 GB profiles](completed/PBI-003-model-registry-and-hardware-profiles.md) | P0 | Luna / High | 001 | COMPLETE |
 | [004 — Transcribe real audio on the laptop GPU](PBI-004-gpu-transcription.md) | P0 | Sol / High | 002, 003 | OPEN |
 | [005 — Protect patients, meetings and source media](completed/PBI-005-local-access-and-object-isolation.md) | P0 | Sol / High | 001, 002 | COMPLETE |
-| [006 — Create a minimal searchable patient directory](PBI-006-patients-api-and-pagination.md) | P0 | Luna / High | 001, 002, 005 | OPEN |
+| [006 — Create a minimal searchable patient directory](completed/PBI-006-patients-api-and-pagination.md) | P0 | Luna / High | 001, 002, 005 | COMPLETE |
 | [007 — Replace the caption home with the doctor dashboard](PBI-007-doctor-dashboard-without-overlay.md) | P0 | Luna / Medium | 001; integrate 005 and 006 | OPEN |
 | [008 — Connect audio/video upload to real processing](PBI-008-meeting-upload-and-progress-ui.md) | P0 | Luna / Medium | 002, 004, 005; fixture development after 001 | OPEN |
 | [009 — Extract evidence-backed final decisions locally](PBI-009-local-llm-and-final-decisions.md) | P0 | Sol / High | 001, 003; 004 for audio-to-decisions acceptance | OPEN |

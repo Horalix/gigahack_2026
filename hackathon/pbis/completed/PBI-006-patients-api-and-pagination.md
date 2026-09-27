@@ -1,7 +1,7 @@
 # PBI-006: Create a minimal searchable patient directory
 
 Parent: `hackathon/pbis/README.md`  
-Status: OPEN  
+Status: COMPLETE — API and basic Notavra directory implemented; prototype routes remain separate
 Priority: P0 — today  
 Owner: You  
 Recommended model: **GPT-6 Luna**  
@@ -43,8 +43,9 @@ Real patient import, full EHR, inferred diagnoses, patient-level summaries of mi
 
 ## Completion record
 
-- Commit / changed files: pending
-- Commands and observed behavior: pending
-- Acceptance evidence / limitations: pending
+- Commit / changed files: see the PBI-006 app completion commit; schema v7, patient API/storage module, route contracts, API tests and a real patient list/create/search view in `LocalWorkbench.svelte`.
+- Commands: `python -m pytest services/meeting/tests/test_patients.py -q` (4 passed); full service suite (36 passed); `npm run check` (0 errors, 0 warnings); `npm run build` passed. Browser smoke created a patient and a meeting linked to that patient.
+- Acceptance evidence: tested 1,005 authorized synthetic records, stable keyset pages, Romanian diacritic and Cyrillic search, reference search, duplicate names, cursor/filter binding, query injection input, restart persistence, grant-based patient visibility, explicit meeting linking, and that a patient link does not grant meeting access.
+- Limits: the record stores name/reference/status only. Access is creator-owned or inherited from explicit access to a linked meeting; viewer grants do not permit patient edits. The patient UI is a minimal real directory, not an EHR or the richer fictional prototype route. This does not establish GDPR or hospital deployment compliance.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
 
