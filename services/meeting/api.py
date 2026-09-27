@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .auth import AuthService, SESSION_COOKIE, SESSION_SECONDS
-from .contracts import CreateAccount, CreateCapture, CreateJob, CreateMeeting, CreatePatient, ErrorEnvelope, FinalizeArtifact, GrantMeetingAccess, LoginRequest, ReviewDecision, ReviewTranscriptIssue, ReviseSegment, ReviseSegments, SealCapture, SetAccountActive, SetupRequest, UndoTranscriptRevision, UpdatePatient
+from .contracts import CreateAccount, CreateCapture, CreateJob, CreateMeeting, CreatePatient, ErrorEnvelope, FinalizeArtifact, GrantMeetingAccess, LoginRequest, RetentionPolicyUpdate, ReviewDecision, ReviewTranscriptIssue, ReviseSegment, ReviseSegments, SealCapture, SetAccountActive, SetupRequest, UndoTranscriptRevision, UpdatePatient
 from .capture import CaptureError, seal_capture
 from .inference_lock import InferenceBusy, inference_device_lock
 from .media import MAX_UPLOAD_BYTES, MediaError, decode
@@ -54,13 +54,14 @@ def meeting_record(row: dict, patient_link_ids: list[str] | None = None) -> dict
 def asset_record(row: dict | None) -> dict | None:
     if row is None:
         return None
-    return {"id": row["id"], "organizationId": row["organization_id"],
+        return {"id": row["id"], "organizationId": row["organization_id"],
             "meetingId": row["meeting_id"], "kind": row["kind"], "storageKey": row["source_key"],
             "sha256": row["source_sha256"], "durationMs": row["duration_ms"],
             "sourceOffsetMs": row["source_offset_ms"], "sizeBytes": row["size_bytes"],
             "mediaType": row["media_type"], "audioTrackIndex": row["audio_track_index"],
             "channels": row["channels"], "sampleRateHz": row["sample_rate_hz"],
             "decodeWarning": row["decode_warning"],
+            "audioAvailable": row.get("source_purged_at") is None,
             "createdAt": row["created_at"]}
 
 
@@ -261,6 +262,27 @@ def create_app(data_root: Path | None = None) -> FastAPI:
                              "transcriptRevision": row["transcript_revision"]} for row in events],
                 "total": total, "limit": limit, "offset": offset}
 
+    @app.get("/api/admin/retention-policy")
+    def get_retention_policy(db: Storage = Depends(store), actor: dict = Depends(administrator)):
+        policy = db.get_retention_policy(actor["organization_id"])
+        if not policy:
+            raise ServiceError(500, "RETENTION_POLICY_MISSING", "Local retention policy is unavailable")
+        return {"audioDays": policy["audio_days"], "transcriptDays": policy["transcript_days"],
+                "artifactDays": policy["artifact_days"], "voiceTemplateDays": policy["voice_template_days"],
+                "updatedAt": policy["updated_at"]}
+
+    @app.put("/api/admin/retention-policy")
+    def update_retention_policy(data: RetentionPolicyUpdate, db: Storage = Depends(store),
+                                actor: dict = Depends(administrator)):
+        if data.voiceTemplateDays is not None:
+            raise ServiceError(422, "VOICE_TEMPLATES_UNAVAILABLE", "This app does not store voice templates")
+        policy = db.update_retention_policy(actor["organization_id"], actor["id"], data.model_dump())
+        if not policy:
+            raise ServiceError(500, "RETENTION_POLICY_MISSING", "Local retention policy is unavailable")
+        return {"audioDays": policy["audio_days"], "transcriptDays": policy["transcript_days"],
+                "artifactDays": policy["artifact_days"], "voiceTemplateDays": policy["voice_template_days"],
+                "updatedAt": policy["updated_at"]}
+
     @app.post("/api/users", status_code=201)
     def create_user(data: CreateAccount, request: Request, _actor: dict = Depends(administrator)):
         try:
@@ -414,6 +436,8 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         asset = db.latest_asset(meeting_id, actor["organization_id"])
         if not asset:
             raise ServiceError(404, "AUDIO_NOT_FOUND", "Audio not found")
+        if asset.get("source_purged_at"):
+            raise ServiceError(410, "AUDIO_EXPIRED", "Audio expired under the local retention policy")
         try:
             path = db.resolve_key(asset["decoded_key"])
         except ValueError as exc:
@@ -797,6 +821,8 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         asset = db.latest_asset(meeting_id, actor["organization_id"])
         if not asset:
             raise ServiceError(409, "AUDIO_REQUIRED", "Upload or record audio before starting a job")
+        if asset.get("source_purged_at"):
+            raise ServiceError(410, "AUDIO_EXPIRED", "Audio expired under the local retention policy; upload the recording again")
         from .models import ModelAssetError, validate_assets, resolve_profile
         try:
             config = resolve_profile(data.profileId, asr_alias=data.asrModelAlias,

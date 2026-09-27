@@ -137,6 +137,15 @@ class ReviewTranscriptIssue(BaseModel):
     reviewStatus: Literal["accepted", "deferred"]
 
 
+class RetentionPolicyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    audioDays: int | None = Field(ge=1, le=3650)
+    transcriptDays: int | None = Field(ge=1, le=3650)
+    artifactDays: int | None = Field(ge=1, le=3650)
+    voiceTemplateDays: int | None = Field(ge=1, le=3650)
+
+
 class CreateCapture(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

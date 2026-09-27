@@ -64,7 +64,16 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     store = Storage()
     worker_id = f"{os.getpid()}-{uuid.uuid4()}"
+    next_retention_sweep = 0.0
     while True:
+        if time.monotonic() >= next_retention_sweep:
+            try:
+                from .retention import apply_expirations
+
+                apply_expirations(store)
+            except Exception:
+                log.error("Local retention sweep failed; it will retry on the next interval")
+            next_retention_sweep = time.monotonic() + 60
         found = run_once(store, worker_id)
         if args.once:
             break

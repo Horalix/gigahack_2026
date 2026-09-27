@@ -15,7 +15,7 @@ from typing import Iterator
 
 LEASE_SECONDS = 30
 MAX_CAPTURE_BYTES = 2 * 1024 * 1024 * 1024
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 def default_data_root() -> Path:
@@ -223,6 +223,22 @@ class Storage:
             if current < 12:
                 db.execute("ALTER TABLE deletion_audit ADD COLUMN transcript_revision INTEGER")
                 db.execute("PRAGMA user_version=12")
+            if current < 13:
+                db.execute("ALTER TABLE assets ADD COLUMN source_purged_at TEXT")
+                db.execute("ALTER TABLE meetings ADD COLUMN transcript_purged_at TEXT")
+                db.execute("""CREATE TABLE retention_policy (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1), organization_id TEXT NOT NULL,
+                    audio_days INTEGER CHECK(audio_days IS NULL OR audio_days BETWEEN 1 AND 3650),
+                    transcript_days INTEGER CHECK(transcript_days IS NULL OR transcript_days BETWEEN 1 AND 3650),
+                    artifact_days INTEGER CHECK(artifact_days IS NULL OR artifact_days BETWEEN 1 AND 3650),
+                    voice_template_days INTEGER CHECK(voice_template_days IS NULL OR voice_template_days BETWEEN 1 AND 3650),
+                    updated_by TEXT, updated_at TEXT NOT NULL
+                )""")
+                db.execute("""INSERT INTO retention_policy(singleton,organization_id,audio_days,transcript_days,
+                    artifact_days,voice_template_days,updated_at)
+                    SELECT 1,organization_id,NULL,NULL,NULL,NULL,? FROM installation WHERE singleton=1""",
+                    (timestamp(),))
+                db.execute("PRAGMA user_version=13")
 
     def asset_path(self, meeting_id: str, asset_id: str, suffix: str) -> Path:
         # IDs are generated locally; never put an uploaded name into a filesystem path.
@@ -444,6 +460,33 @@ class Storage:
                 WHERE a.organization_id=? ORDER BY a.created_at DESC,a.id DESC LIMIT ? OFFSET ?""",
                 (organization_id, limit, offset)).fetchall()
             return [dict(row) for row in rows], total
+
+    def get_retention_policy(self, organization_id: str) -> dict | None:
+        with closing(self.connect()) as db:
+            row = db.execute("SELECT * FROM retention_policy WHERE singleton=1 AND organization_id=?",
+                             (organization_id,)).fetchone()
+            return dict(row) if row else None
+
+    def update_retention_policy(self, organization_id: str, actor_id: str, policy: dict) -> dict | None:
+        with self.transaction() as db:
+            current = db.execute("SELECT * FROM retention_policy WHERE singleton=1 AND organization_id=?",
+                                 (organization_id,)).fetchone()
+            if not current:
+                return None
+            result = db.execute("""UPDATE retention_policy SET audio_days=?,transcript_days=?,artifact_days=?,
+                voice_template_days=?,updated_by=?,updated_at=? WHERE singleton=1 AND organization_id=?""",
+                (policy["audioDays"], policy["transcriptDays"], policy["artifactDays"],
+                 policy["voiceTemplateDays"], actor_id, timestamp(), organization_id))
+            if result.rowcount != 1:
+                return None
+            db.execute("""INSERT INTO deletion_audit
+                (id,organization_id,actor_id,subject_type,subject_id,action,created_at,transcript_revision)
+                VALUES(?,?,?,?,?,?,?,NULL)""",
+                (str(uuid.uuid4()), organization_id, actor_id, "retention_policy", "singleton",
+                 "policy_updated", timestamp()))
+            row = db.execute("SELECT * FROM retention_policy WHERE singleton=1 AND organization_id=?",
+                             (organization_id,)).fetchone()
+            return dict(row)
 
     def installation_organization(self) -> str:
         with closing(self.connect()) as db:
@@ -952,7 +995,8 @@ class Storage:
                     (segment_id, job["organization_id"], job["meeting_id"], job["asset_id"], job["id"],
                      revision, segment["startMs"], segment["endMs"], segment["text"],
                      segment["language"], segment["origin"], json.dumps(segment.get("words", []), ensure_ascii=False), timestamp()))
-            db.execute("UPDATE meetings SET transcript_revision=?,updated_at=? WHERE id=?", (revision, timestamp(), job["meeting_id"]))
+            db.execute("UPDATE meetings SET transcript_revision=?,transcript_purged_at=NULL,updated_at=? WHERE id=?",
+                       (revision, timestamp(), job["meeting_id"]))
 
     def get_segments(self, meeting_id: str, organization_id: str) -> list[dict]:
         with closing(self.connect()) as db:
