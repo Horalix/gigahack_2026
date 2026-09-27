@@ -178,6 +178,8 @@ class LocalLLM:
                 raise TypeError
             finish_reason = str(payload["choices"][0].get("finish_reason", "unknown"))
             content_length = len(content)
+            if finish_reason == "length":
+                raise LLMError("LLM_OUTPUT_TRUNCATED", "The local model output reached its token limit")
             return _extract_json(content, required_key)
         except (KeyError, IndexError, TypeError) as exc:
             raise LLMError("LLM_INVALID_OUTPUT", "The local model returned an invalid response") from exc
