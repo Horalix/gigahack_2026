@@ -55,6 +55,9 @@ def test_upload_is_durable_and_filename_is_generated(tmp_path, monkeypatch):
     org_id = store.installation_organization()
     assert store.resolve_key(store.latest_asset(meeting_id, org_id)["decoded_key"]).exists()
     assert store.latest_asset(meeting_id, org_id)["id"] == asset["id"]
+    playback = api.get(f"/api/meetings/{meeting_id}/audio")
+    assert playback.status_code == 200 and playback.headers["content-type"].startswith("audio/wav")
+    assert len(playback.content) > 44
     anonymous = TestClient(api.app, headers={"Origin": "http://localhost:1420"})
     assert anonymous.get(f"/api/meetings/{meeting_id}").status_code == 401
 

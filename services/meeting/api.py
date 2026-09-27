@@ -325,6 +325,20 @@ def create_app(data_root: Path | None = None) -> FastAPI:
             raise ServiceError(404, "MEETING_NOT_FOUND", "Meeting not found")
         return {"ok": True, "pendingFileCleanup": pending_files}
 
+    @app.get("/api/meetings/{meeting_id}/audio")
+    def play_meeting_audio(meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting_or_404(meeting_id, actor, db)
+        asset = db.latest_asset(meeting_id, actor["organization_id"])
+        if not asset:
+            raise ServiceError(404, "AUDIO_NOT_FOUND", "Audio not found")
+        try:
+            path = db.resolve_key(asset["decoded_key"])
+        except ValueError as exc:
+            raise ServiceError(404, "AUDIO_NOT_FOUND", "Audio not found") from exc
+        if not path.is_file():
+            raise ServiceError(404, "AUDIO_NOT_FOUND", "Audio not found")
+        return FileResponse(path, media_type="audio/wav", filename="notavra-audio.wav", content_disposition_type="inline")
+
     @app.post("/api/meetings/{meeting_id}/artifacts", status_code=201)
     def finalize_artifact(meeting_id: str, data: FinalizeArtifact,
                           actor: dict = Depends(principal), db: Storage = Depends(store)):
