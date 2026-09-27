@@ -1,8 +1,8 @@
 # Secure MOM execution backlog
 
-**26 September 2026; finish today; base implementation checkpoint: `noomy/freepalestine`, commit `820f1a9`; uncommitted work is present.**
+**27 September 2026; implementation checkpoint: `codex/app-completion`, commit `4c69d06`, pushed.** The branch started from current `develop` after Affan's branch was merged. The independent ASR experiment is on `codex/asr-comparison` at `411750d`; merge the completed app branch into it before refreshing the report.
 
-This index supersedes the older task order. PBIs 001, 002 and 003 are complete; 004 remains OPEN for accuracy qualification. [The live team handoff](../10-team-handoff.md) governs current evidence, epic ownership and branch boundaries, superseding old Owner labels in individual PBIs. Affan finished SMTP on his separate branch; integration has not been verified.
+This index supersedes older task order and owner guesses in individual PBIs. PBIs 001–003 and 005–006 are complete. The app now has a local workbench, searchable/paginated patient directory, upload/job/transcript/action flow, approved HTML artifact, durable microphone chunk capture, transcript edits/undo, local meeting purge and a Windows launch runbook. PBIs 004 and 007–017 remain OPEN where real accuracy, UI, Tauri, one-hour or offline acceptance is unverified; each PBI records what is implemented. The Whisper/OmniASR comparison is experimental and lives on its separate branch until merged. [The live team handoff](../10-team-handoff.md) contains current branch state and integration boundaries. Affan owns SMTP; no mailing code is included here.
 
 ## Scope and authority
 
@@ -12,13 +12,14 @@ Affan owns mailing. Our boundary is a finalized file with stable ID/revision/che
 
 P0 = required today, including user-added patients/live/editing and CEO presentation. P1 = optional only after all P0 gates pass. P2 and pilot/scale gates cover the full product direction but are not promised today. A production EU healthcare rollout cannot be inferred from today's working prototype. Patient dashboard is a lightweight authorized directory/document view, not a complete EHR; hospital meetings remain valid without a patient link.
 
-## Start now
+## Current next work
 
-1. **Core/backend developer:** start PBI-009's local decision pipeline against fixture transcripts and the pinned Qwen runtime. Keep PBI-004 OPEN; use its known code-switch failures as a release risk, then return to focused accuracy work after the first vertical flow works.
-2. **Affan/UI developer:** start the dashboard and upload/progress/transcript screens (PBI-007/008), using the existing authenticated API and fixtures for unfinished routes. He owns all screens and frontend integration, plus his separate SMTP work.
-3. **CEO:** draft the pitch and collect permitted, human-checked evaluation references now. Make performance and delivery claims only after PBI-017 and the integrated SMTP path are measured.
+1. **Complete and rehearse the real vertical flow:** setup/login → patient/meeting → audio/video upload or microphone capture → local ASR → local decisions with evidence → correction/reprocess → approve and download HTML. Use only synthetic or explicitly permitted audio. Record the cold/warm stage times and errors.
+2. **Qualify the release claims:** keep Romanian selected for Medpark. PBI-025 reports Whisper vs OmniASR disagreement on the same challenge file, but the Microsoft reference is machine-generated and unverified. Do not report this as clinical WER. Keep the one-hour/15-minute criterion OPEN until a full one-hour local pipeline run is measured.
+3. **Close remaining P0 integration gaps:** verify Affan can attach the downloaded artifact on his own SMTP path; physically test microphone recording, review/search/replacement and Tauri on the demo laptop; prepare and test WAN-disconnected launch. Email implementation remains Affan's responsibility.
+4. **CEO:** finish the pitch and rehearse, with measured facts only. Security is pass/fail; say clearly that the prototype is local-first but is not GDPR-certified or cleared for real patient data.
 
-Implementation ownership is horizontal across PBIs: core owns service/API/storage/inference; Affan owns screens. The live handoff lists the current API routes and integration sequence. Freeze a small JSON fixture/response shape before either side consumes a new endpoint; only one developer edits shared contracts, storage and migrations at a time.
+The user authorized the current implementation branch to finish frontend and backend together. Affan owns SMTP and its output-file intake; the current app generates a human-approved downloadable file. Preserve that boundary. Freeze payload changes in the existing API contracts and update PBIs after each increment; only one developer edits shared contracts/storage/migrations per commit.
 
 ## Model budget rules
 
@@ -40,7 +41,7 @@ Use [the live handoff](../10-team-handoff.md) for the current parallel order. A 
 | [003 — Prepare local model registry and 8/16 GB profiles](completed/PBI-003-model-registry-and-hardware-profiles.md) | P0 | Luna / High | 001 | COMPLETE |
 | [004 — Transcribe real audio on the laptop GPU](PBI-004-gpu-transcription.md) | P0 | Sol / High | 002, 003 | OPEN |
 | [005 — Protect patients, meetings and source media](completed/PBI-005-local-access-and-object-isolation.md) | P0 | Sol / High | 001, 002 | COMPLETE |
-| [006 — Create a minimal searchable patient directory](PBI-006-patients-api-and-pagination.md) | P0 | Luna / High | 001, 002, 005 | OPEN |
+| [006 — Create a minimal searchable patient directory](completed/PBI-006-patients-api-and-pagination.md) | P0 | Luna / High | 001, 002, 005 | COMPLETE |
 | [007 — Replace the caption home with the doctor dashboard](PBI-007-doctor-dashboard-without-overlay.md) | P0 | Luna / Medium | 001; integrate 005 and 006 | OPEN |
 | [008 — Connect audio/video upload to real processing](PBI-008-meeting-upload-and-progress-ui.md) | P0 | Luna / Medium | 002, 004, 005; fixture development after 001 | OPEN |
 | [009 — Extract evidence-backed final decisions locally](PBI-009-local-llm-and-final-decisions.md) | P0 | Sol / High | 001, 003; 004 for audio-to-decisions acceptance | OPEN |

@@ -41,8 +41,8 @@ Affan's sending UI, live capture internals, AI correction queue, visual redesign
 
 ## Completion record
 
-- Commit / changed files: pending
-- Commands and observed behavior: pending
-- Acceptance evidence / limitations: pending
+- Commit / changed files: `ca2ae6e`, `00a5730`; connected audio/video upload, durable local jobs, progress, retry, transcript and action views to the workbench.
+- Commands and observed behavior: service tests cover audio/video upload, missing audio, corrupt input, job retry/restart and source persistence; a synthetic local audio-to-ASR/LLM run completed previously. Current full suite has 45 passing service tests; Svelte check/build pass.
+- Acceptance evidence / limitations: upload-to-result path is present, but no current-medpark in-app run, one-hour upload/reload test or 15-minute full-pipeline measurement is recorded. Keep PBI OPEN pending the real demo recording and end-to-end timing.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
 

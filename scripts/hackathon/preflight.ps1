@@ -1,0 +1,43 @@
+param(
+    [ValidateSet('laptop8', 'hospital16', 'cpu')]
+    [string]$ProfileId = 'laptop8',
+    [string]$PythonPath = (Join-Path $env:LOCALAPPDATA 'SecureMOM/venv/Scripts/python.exe')
+)
+
+$ErrorActionPreference = 'Stop'
+$projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+$env:MOM_PROFILE = $ProfileId
+
+foreach ($tool in @('node', 'npm', 'ffmpeg', 'ffprobe')) {
+    if (!(Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Required local tool is missing: $tool" }
+}
+if (!(Test-Path -LiteralPath $PythonPath)) { throw "Prepared Python environment is missing: $PythonPath. Create it and install services/meeting/requirements.lock as described in hackathon/RUNBOOK.md." }
+if (!(Test-Path -LiteralPath (Join-Path $projectRoot 'node_modules/vite/bin/vite.js'))) {
+    throw 'Node dependencies are missing. Run npm ci from the repository root.'
+}
+
+$pythonCheck = @'
+import os
+from services.meeting.models import resolve_profile, validate_assets
+from services.meeting.storage import Storage
+profile = os.environ["MOM_PROFILE"]
+config = resolve_profile(profile_id=profile)
+validate_assets(config)
+Storage()
+print(f"Profile {profile}: pinned ASR and LLM files verified; data directory is outside the checkout.")
+'@
+$checkOutput = & $PythonPath -c $pythonCheck 2>&1
+if ($LASTEXITCODE -ne 0) { throw "Python/model preflight failed:`n$checkOutput" }
+$checkOutput | Write-Output
+
+$gpu = & nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null
+if ($LASTEXITCODE -eq 0 -and $gpu) {
+    $memoryGb = [math]::Round(([int]($gpu | Select-Object -First 1) / 1024), 1)
+    Write-Output "Detected GPU memory: $memoryGb GiB."
+    $required = if ($ProfileId -eq 'hospital16') { 14 } elseif ($ProfileId -eq 'laptop8') { 7 } else { 0 }
+    if ($required -and $memoryGb -lt $required) { throw "Selected profile requires at least $required GiB detected VRAM." }
+} elseif ($ProfileId -ne 'cpu') {
+    throw 'NVIDIA GPU was not detected. Choose -ProfileId cpu only if its pinned models are installed.'
+}
+
+Write-Output 'Preflight passed. This checks local files and dependencies; it does not qualify accuracy, runtime or offline egress.'

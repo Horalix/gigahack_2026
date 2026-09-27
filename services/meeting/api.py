@@ -10,14 +10,16 @@ import uuid
 from pathlib import Path
 
 from fastapi import Cookie, Depends, FastAPI, File, Query, Request, Response, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import AuthService, SESSION_COOKIE, SESSION_SECONDS
-from .contracts import CreateAccount, CreateJob, CreateMeeting, ErrorEnvelope, GrantMeetingAccess, LoginRequest, ReviseSegment, SetAccountActive, SetupRequest
+from .contracts import CreateAccount, CreateCapture, CreateJob, CreateMeeting, CreatePatient, ErrorEnvelope, FinalizeArtifact, GrantMeetingAccess, LoginRequest, ReviseSegment, ReviseSegments, SealCapture, SetAccountActive, SetupRequest, UndoTranscriptRevision, UpdatePatient
+from .capture import CaptureError, seal_capture
 from .media import MAX_UPLOAD_BYTES, MediaError, decode
-from .storage import Storage
+from .patients import PatientDirectory
+from .storage import Storage, timestamp
 
 
 DEFAULT_ALLOWED_ORIGINS = {
@@ -35,11 +37,11 @@ class ServiceError(Exception):
         self.retryable = retryable
 
 
-def meeting_record(row: dict) -> dict:
+def meeting_record(row: dict, patient_link_ids: list[str] | None = None) -> dict:
     return {"id": row["id"], "organizationId": row["organization_id"],
             "title": row["title"], "recordedAt": row["recorded_at"], "timeZone": row["time_zone"],
             "meetingType": row["meeting_type"], "suggestedMeetingType": None,
-            "outputLanguage": row["output_language"], "patientLinkIds": [], "participantIds": [],
+            "outputLanguage": row["output_language"], "patientLinkIds": patient_link_ids or [], "participantIds": [],
             "status": row["status"], "transcriptRevision": row["transcript_revision"],
             "createdAt": row["created_at"], "updatedAt": row["updated_at"]}
 
@@ -74,6 +76,15 @@ def segment_record(row: dict) -> dict:
             "speakerClusterId": None, "origin": row["origin"], "words": row["words"]}
 
 
+def artifact_record(row: dict) -> dict:
+    return {"id": row["id"], "organizationId": row["organization_id"],
+            "meetingId": row["meeting_id"], "transcriptRevision": row["transcript_revision"],
+            "storageKey": row["storage_key"], "mimeType": row["mime_type"],
+            "sha256": row["sha256"], "status": row["status"],
+            "approvedBy": row["approved_by"], "approvedAt": row["approved_at"],
+            "createdAt": row["created_at"]}
+
+
 def host_gpu_memory_gb() -> float | None:
     try:
         result = subprocess.run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
@@ -94,7 +105,7 @@ def create_app(data_root: Path | None = None) -> FastAPI:
                        if configured_origins else DEFAULT_ALLOWED_ORIGINS)
     app.state.allowed_origins = allowed_origins
     app.add_middleware(CORSMiddleware, allow_origins=sorted(allowed_origins), allow_credentials=True,
-                       allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+                       allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
                        allow_headers=["Content-Type"])
 
     @app.middleware("http")
@@ -215,36 +226,165 @@ def create_app(data_root: Path | None = None) -> FastAPI:
     def health(db: Storage = Depends(store)):
         return {"status": "ok", "service": "meeting", "setupRequired": db.user_count() == 0}
 
+    @app.get("/api/patients")
+    def list_patients(q: str = Query(default="", max_length=120), limit: int = Query(default=25, ge=1, le=100),
+                      cursor: str | None = Query(default=None, max_length=1024),
+                      actor: dict = Depends(principal), db: Storage = Depends(store)):
+        try:
+            return PatientDirectory(db).list(actor, query=q, limit=limit, cursor=cursor)
+        except ValueError as exc:
+            raise ServiceError(422, "PATIENT_CURSOR_INVALID", str(exc)) from exc
+
+    @app.post("/api/patients", status_code=201)
+    def create_patient(data: CreatePatient, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        if actor["role"] == "reviewer":
+            raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot create patients")
+        try:
+            return {"patient": PatientDirectory(db).create(actor, data.displayName, data.hospitalReference, data.status)}
+        except ValueError as exc:
+            raise ServiceError(422, "PATIENT_INVALID", str(exc)) from exc
+
+    @app.get("/api/patients/{patient_id}")
+    def get_patient(patient_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        patient = PatientDirectory(db).get(actor, patient_id)
+        if not patient:
+            raise ServiceError(404, "PATIENT_NOT_FOUND", "Patient not found")
+        return {"patient": patient}
+
+    @app.patch("/api/patients/{patient_id}")
+    def update_patient(patient_id: str, data: UpdatePatient, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        if actor["role"] == "reviewer":
+            raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot edit patients")
+        names = {"displayName": "display_name", "hospitalReference": "hospital_reference", "status": "status"}
+        changes = {names[key]: getattr(data, key) for key in data.model_fields_set}
+        try:
+            patient = PatientDirectory(db).update(actor, patient_id, changes)
+        except (TypeError, ValueError) as exc:
+            raise ServiceError(422, "PATIENT_INVALID", str(exc)) from exc
+        if not patient:
+            raise ServiceError(404, "PATIENT_NOT_FOUND", "Patient not found")
+        return {"patient": patient}
+
+    @app.post("/api/patients/{patient_id}/meetings/{meeting_id}", status_code=201)
+    def link_patient_meeting(patient_id: str, meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        if not PatientDirectory(db).link_meeting(actor, patient_id, meeting_id, linked=True):
+            raise ServiceError(404, "PATIENT_OR_MEETING_NOT_FOUND", "Patient or meeting not found")
+        return {"patientId": patient_id, "meetingId": meeting_id, "linked": True}
+
+    @app.delete("/api/patients/{patient_id}/meetings/{meeting_id}")
+    def unlink_patient_meeting(patient_id: str, meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        if not PatientDirectory(db).link_meeting(actor, patient_id, meeting_id, linked=False):
+            raise ServiceError(404, "PATIENT_OR_MEETING_NOT_FOUND", "Patient or meeting not found")
+        return {"patientId": patient_id, "meetingId": meeting_id, "linked": False}
+
     @app.post("/api/meetings", status_code=201)
     def create_meeting(data: CreateMeeting, actor: dict = Depends(principal), db: Storage = Depends(store)):
         if actor["role"] == "reviewer":
             raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot create meetings")
-        if data.patientLinkIds:
-            raise ServiceError(422, "PATIENT_LINKS_UNAVAILABLE", "Patient links require the access service")
         item = data.model_dump()
         item["recordedAt"] = data.recordedAt.isoformat()
-        return meeting_record(db.create_meeting(actor, item))
+        try:
+            meeting = db.create_meeting(actor, item)
+        except ValueError as exc:
+            raise ServiceError(422, "PATIENT_LINK_INVALID", "A selected patient is unavailable") from exc
+        return meeting_record(meeting, db.meeting_patient_ids(meeting["id"], actor["organization_id"]))
 
     @app.get("/api/meetings")
     def list_meetings(q: str = "", limit: int = Query(default=20, ge=1, le=100),
                       offset: int = Query(default=0, ge=0), actor: dict = Depends(principal),
                       db: Storage = Depends(store)):
         rows, total = db.list_meetings(actor["id"], actor["organization_id"], query=q, limit=limit, offset=offset)
-        return {"meetings": [meeting_record(row) for row in rows], "total": total,
+        return {"meetings": [meeting_record(row, db.meeting_patient_ids(row["id"], actor["organization_id"])) for row in rows], "total": total,
                 "limit": limit, "offset": offset}
 
     @app.get("/api/meetings/{meeting_id}")
     def get_meeting(meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
         meeting = meeting_or_404(meeting_id, actor, db)
-        return {"meeting": meeting_record(meeting),
+        artifact = db.latest_artifact(meeting_id, actor["organization_id"])
+        return {"meeting": meeting_record(meeting, db.meeting_patient_ids(meeting_id, actor["organization_id"])),
+                "permission": db.meeting_permission(meeting_id, actor["id"], actor["organization_id"]),
                 "asset": asset_record(db.latest_asset(meeting_id, actor["organization_id"])),
                 "segments": [segment_record(row) for row in db.get_segments(meeting_id, actor["organization_id"])],
-                "decisions": db.get_meeting_decisions(meeting_id, actor["organization_id"])}
+                "decisions": db.get_meeting_decisions(meeting_id, actor["organization_id"]),
+                "canUndoCorrection": db.can_undo_transcript_revision(meeting_id, actor["organization_id"], meeting["transcript_revision"]),
+                "captures": db.list_open_captures(meeting_id, actor["organization_id"]),
+                "artifact": artifact_record(artifact) if artifact else None}
+
+    @app.delete("/api/meetings/{meeting_id}")
+    def purge_meeting(meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting_or_404(meeting_id, actor, db)
+        if db.meeting_permission(meeting_id, actor["id"], actor["organization_id"]) != "owner":
+            raise ServiceError(403, "MEETING_OWNER_REQUIRED", "Only the meeting owner can delete this meeting")
+        try:
+            pending_files = db.purge_meeting(meeting_id, actor["organization_id"], actor["id"])
+        except RuntimeError as exc:
+            if str(exc) == "MEETING_PROCESSING":
+                raise ServiceError(409, "MEETING_PROCESSING", "Stop or wait for active processing before deleting this meeting") from exc
+            raise
+        if pending_files is None:
+            raise ServiceError(404, "MEETING_NOT_FOUND", "Meeting not found")
+        return {"ok": True, "pendingFileCleanup": pending_files}
+
+    @app.get("/api/meetings/{meeting_id}/audio")
+    def play_meeting_audio(meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting_or_404(meeting_id, actor, db)
+        asset = db.latest_asset(meeting_id, actor["organization_id"])
+        if not asset:
+            raise ServiceError(404, "AUDIO_NOT_FOUND", "Audio not found")
+        try:
+            path = db.resolve_key(asset["decoded_key"])
+        except ValueError as exc:
+            raise ServiceError(404, "AUDIO_NOT_FOUND", "Audio not found") from exc
+        if not path.is_file():
+            raise ServiceError(404, "AUDIO_NOT_FOUND", "Audio not found")
+        return FileResponse(path, media_type="audio/wav", filename="notavra-audio.wav", content_disposition_type="inline")
+
+    @app.post("/api/meetings/{meeting_id}/artifacts", status_code=201)
+    def finalize_artifact(meeting_id: str, data: FinalizeArtifact,
+                          actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting = meeting_or_404(meeting_id, actor, db, write=True)
+        if actor["role"] == "reviewer":
+            raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot approve output")
+        if not data.confirmHumanReview:
+            raise ServiceError(422, "HUMAN_REVIEW_REQUIRED", "Explicitly confirm that you reviewed the transcript and actions")
+        decisions = db.get_meeting_decisions(meeting_id, actor["organization_id"])
+        if (not decisions or meeting["transcript_revision"] != data.transcriptRevision or
+                decisions.get("transcriptRevision") != data.transcriptRevision):
+            raise ServiceError(409, "ARTIFACT_SNAPSHOT_STALE", "Current transcript and decisions are not ready for approval")
+        from .rendering import render_minutes_html
+        approved_at = timestamp()
+        content = render_minutes_html(meeting, db.get_segments(meeting_id, actor["organization_id"]), decisions,
+                                      reviewer=actor["username"], approved_at=approved_at)
+        artifact = db.create_artifact(meeting_id, actor["organization_id"], actor["id"],
+                                      data.transcriptRevision, decisions, content)
+        if not artifact:
+            raise ServiceError(409, "ARTIFACT_SNAPSHOT_STALE", "Transcript or decisions changed; reload before approval")
+        return {"artifact": artifact_record(artifact)}
+
+    @app.get("/api/artifacts/{artifact_id}/content")
+    def download_artifact(artifact_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        artifact = db.get_artifact(artifact_id, actor["organization_id"])
+        if not artifact or artifact["status"] != "ready":
+            raise ServiceError(404, "ARTIFACT_NOT_FOUND", "Artifact not found")
+        meeting = meeting_or_404(artifact["meeting_id"], actor, db)
+        latest = db.latest_artifact(meeting["id"], actor["organization_id"])
+        if (not latest or latest["id"] != artifact_id or
+                artifact["transcript_revision"] != meeting["transcript_revision"]):
+            raise ServiceError(404, "ARTIFACT_NOT_FOUND", "Artifact not found")
+        try:
+            path = db.artifact_path(artifact["storage_key"])
+        except FileNotFoundError as exc:
+            raise ServiceError(404, "ARTIFACT_NOT_FOUND", "Artifact file not found") from exc
+        if hashlib.sha256(path.read_bytes()).hexdigest() != artifact["sha256"]:
+            raise ServiceError(503, "ARTIFACT_CHECKSUM_FAILED", "The approved artifact failed its integrity check")
+        return FileResponse(path, media_type="text/html", filename=f"notavra-minutes-{artifact_id}.html")
 
     @app.put("/api/meetings/{meeting_id}/segments/{segment_id}")
     def revise_segment(meeting_id: str, segment_id: str, data: ReviseSegment,
                        actor: dict = Depends(principal), db: Storage = Depends(store)):
         meeting_or_404(meeting_id, actor, db, write=True)
+        if actor["role"] == "reviewer":
+            raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot edit transcripts")
         try:
             segment = db.revise_segment(meeting_id, actor["organization_id"], segment_id,
                                         actor["id"], data.transcriptRevision, data.text)
@@ -253,6 +393,36 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         if not segment:
             raise ServiceError(409, "TRANSCRIPT_REVISION_CONFLICT", "Transcript changed; reload before editing")
         return segment_record(segment)
+
+    @app.put("/api/meetings/{meeting_id}/segments")
+    def revise_segments(meeting_id: str, data: ReviseSegments,
+                        actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting_or_404(meeting_id, actor, db, write=True)
+        if actor["role"] == "reviewer":
+            raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot edit transcripts")
+        try:
+            segments = db.revise_segments(meeting_id, actor["organization_id"], actor["id"],
+                                          data.transcriptRevision,
+                                          [item.model_dump() for item in data.corrections])
+        except ValueError as exc:
+            raise ServiceError(422, "TRANSCRIPT_TEXT_INVALID", str(exc)) from exc
+        if segments is None:
+            raise ServiceError(409, "TRANSCRIPT_REVISION_CONFLICT", "Transcript changed; reload before editing")
+        return {"transcriptRevision": data.transcriptRevision + 1,
+                "segments": [segment_record(segment) for segment in segments]}
+
+    @app.post("/api/meetings/{meeting_id}/transcript/undo")
+    def undo_transcript_revision(meeting_id: str, data: UndoTranscriptRevision,
+                                 actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting_or_404(meeting_id, actor, db, write=True)
+        if actor["role"] == "reviewer":
+            raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot edit transcripts")
+        segments = db.undo_transcript_revision(meeting_id, actor["organization_id"], actor["id"],
+                                               data.transcriptRevision)
+        if segments is None:
+            raise ServiceError(409, "TRANSCRIPT_REVISION_CONFLICT", "No matching correction revision can be undone")
+        return {"transcriptRevision": data.transcriptRevision + 1,
+                "segments": [segment_record(segment) for segment in segments]}
 
     @app.get("/api/meetings/{meeting_id}/grants")
     def get_meeting_grants(meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
@@ -298,7 +468,7 @@ def create_app(data_root: Path | None = None) -> FastAPI:
                             "compatible": compatible, "hostVramGb": gpu_memory,
                             "asrFilesPresent": (asr_path / "model.bin").is_file(),
                             "llmFilePresent": llm_path.is_file()})
-        return {"profiles": choices, "verified": False}
+        return {"profiles": choices, "defaultProfileId": os.environ.get("MOM_PROFILE", "laptop8"), "verified": False}
 
     @app.post("/api/meetings/{meeting_id}/audio", status_code=201)
     async def upload_audio(
@@ -344,6 +514,72 @@ def create_app(data_root: Path | None = None) -> FastAPI:
                 # A failed ingest must not leave an untracked copy of sensitive media.
                 source.unlink(missing_ok=True)
                 decoded.unlink(missing_ok=True)
+
+    @app.post("/api/meetings/{meeting_id}/captures", status_code=201)
+    def create_capture(meeting_id: str, data: CreateCapture, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting_or_404(meeting_id, actor, db, write=True)
+        try:
+            capture = db.create_capture_session(meeting_id, actor["organization_id"], actor["id"], data.contentType)
+        except ValueError as exc:
+            raise ServiceError(422, "CAPTURE_FORMAT_UNSUPPORTED", str(exc)) from exc
+        return {"id": capture["id"], "state": capture["state"], "nextSequence": 0}
+
+    @app.get("/api/captures/{capture_id}")
+    def get_capture(capture_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        capture = db.get_capture_session(capture_id, actor["organization_id"])
+        if not capture or not db.meeting_permission(capture["meeting_id"], actor["id"], actor["organization_id"]):
+            raise ServiceError(404, "CAPTURE_NOT_FOUND", "Capture not found")
+        return {"id": capture["id"], "meetingId": capture["meeting_id"], "state": capture["state"],
+                "nextSequence": capture["next_sequence"], "receivedBytes": capture["received_bytes"],
+                "errorCode": capture["error_code"]}
+
+    @app.delete("/api/captures/{capture_id}")
+    def delete_capture(capture_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        if not db.delete_capture(capture_id, actor["organization_id"], actor["id"]):
+            raise ServiceError(404, "CAPTURE_NOT_FOUND", "Capture not found")
+        return {"ok": True}
+
+    @app.put("/api/captures/{capture_id}/chunks/{sequence}")
+    async def upload_capture_chunk(capture_id: str, sequence: int, request: Request,
+                                   actor: dict = Depends(principal), db: Storage = Depends(store)):
+        if sequence < 0 or sequence > 2159:
+            raise ServiceError(422, "CAPTURE_SEQUENCE_INVALID", "Capture chunk sequence is outside its limit")
+        capture = db.get_capture_session(capture_id, actor["organization_id"])
+        if not capture:
+            raise ServiceError(404, "CAPTURE_NOT_FOUND", "Capture not found")
+        meeting_or_404(capture["meeting_id"], actor, db, write=True)
+        if request.headers.get("content-type", "").casefold() != capture["content_type"].casefold():
+            raise ServiceError(415, "CAPTURE_FORMAT_CHANGED", "Capture chunk format does not match the session")
+        chunks = []
+        size = 0
+        async for part in request.stream():
+            size += len(part)
+            if size > 32 * 1024 * 1024:
+                raise ServiceError(413, "CAPTURE_CHUNK_TOO_LARGE", "A recording chunk exceeds 32 MiB")
+            chunks.append(part)
+        try:
+            return db.store_capture_chunk(capture_id, actor["organization_id"], actor["id"],
+                                          sequence, b"".join(chunks))
+        except LookupError as exc:
+            raise ServiceError(404, "CAPTURE_NOT_FOUND", "Capture not found") from exc
+        except OverflowError as exc:
+            raise ServiceError(413, "CAPTURE_TOO_LARGE", "The capture exceeds the 2 GiB limit") from exc
+        except ValueError as exc:
+            raise ServiceError(409, "CAPTURE_SEQUENCE_CONFLICT", str(exc)) from exc
+
+    @app.post("/api/captures/{capture_id}/seal")
+    async def seal_capture_route(capture_id: str, data: SealCapture,
+                                 actor: dict = Depends(principal), db: Storage = Depends(store)):
+        capture = db.get_capture_session(capture_id, actor["organization_id"])
+        if not capture:
+            raise ServiceError(404, "CAPTURE_NOT_FOUND", "Capture not found")
+        meeting_or_404(capture["meeting_id"], actor, db, write=True)
+        try:
+            asset = await asyncio.to_thread(seal_capture, db, capture_id, actor["organization_id"],
+                                            actor["id"], data.expectedSequenceCount)
+        except CaptureError as exc:
+            raise ServiceError(exc.status, exc.code, str(exc), retryable=exc.status >= 500) from exc
+        return {"asset": asset_record(asset), "state": "sealed"}
 
     @app.post("/api/meetings/{meeting_id}/jobs", status_code=202)
     def create_job(data: CreateJob, meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):

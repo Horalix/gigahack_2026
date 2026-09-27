@@ -14,7 +14,7 @@ class CreateMeeting(BaseModel):
     recordedAt: datetime
     timeZone: str = Field(min_length=1, max_length=64)
     outputLanguage: Literal["ro", "ru", "en"]
-    patientLinkIds: list[str] = Field(default_factory=list)
+    patientLinkIds: list[str] = Field(default_factory=list, max_length=50)
     meetingType: str | None = Field(default=None, max_length=80)
 
     @field_validator("recordedAt")
@@ -30,6 +30,26 @@ class ReviseSegment(BaseModel):
 
     transcriptRevision: int = Field(ge=1)
     text: str = Field(min_length=1, max_length=5000)
+
+
+class SegmentCorrection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    segmentId: str = Field(min_length=1, max_length=128)
+    text: str = Field(min_length=1, max_length=5000)
+
+
+class ReviseSegments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transcriptRevision: int = Field(ge=1)
+    corrections: list[SegmentCorrection] = Field(min_length=1, max_length=500)
+
+
+class UndoTranscriptRevision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transcriptRevision: int = Field(ge=1)
 
 
 class CreateJob(BaseModel):
@@ -74,6 +94,41 @@ class GrantMeetingAccess(BaseModel):
 
     userId: str = Field(min_length=1, max_length=128)
     permission: Literal["editor", "viewer"]
+
+
+class CreatePatient(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    displayName: str = Field(min_length=1, max_length=160)
+    hospitalReference: str | None = Field(default=None, max_length=120)
+    status: Literal["active", "inactive"] = "active"
+
+
+class UpdatePatient(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    displayName: str | None = Field(default=None, min_length=1, max_length=160)
+    hospitalReference: str | None = Field(default=None, max_length=120)
+    status: Literal["active", "inactive"] | None = None
+
+
+class FinalizeArtifact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transcriptRevision: int = Field(ge=1)
+    confirmHumanReview: bool
+
+
+class CreateCapture(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contentType: Literal["audio/webm", "audio/webm;codecs=opus", "audio/mp4", "audio/wav"]
+
+
+class SealCapture(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expectedSequenceCount: int = Field(ge=1, le=2160)
 
 
 class ErrorEnvelope(BaseModel):

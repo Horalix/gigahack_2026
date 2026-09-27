@@ -1,8 +1,10 @@
 """Durable meeting records and a single GPU job lease in SQLite."""
 
 import json
+import hashlib
 import os
 import sqlite3
+import tempfile
 import time
 import uuid
 from contextlib import closing, contextmanager
@@ -12,7 +14,8 @@ from typing import Iterator
 
 
 LEASE_SECONDS = 30
-SCHEMA_VERSION = 6
+MAX_CAPTURE_BYTES = 2 * 1024 * 1024 * 1024
+SCHEMA_VERSION = 10
 
 
 def default_data_root() -> Path:
@@ -148,6 +151,65 @@ class Storage:
                 )""")
                 db.execute("CREATE INDEX segment_revisions_meeting ON segment_revisions(meeting_id,created_at)")
                 db.execute("PRAGMA user_version=6")
+            if current < 7:
+                db.execute("""CREATE TABLE patients (
+                    id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL, search_name TEXT NOT NULL,
+                    hospital_reference TEXT, search_reference TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL CHECK(status IN ('active','inactive')),
+                    created_by TEXT NOT NULL REFERENCES users(id),
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                )""")
+                db.execute("CREATE INDEX patients_org_name ON patients(organization_id,search_name,id)")
+                db.execute("CREATE INDEX patients_org_reference ON patients(organization_id,search_reference,id)")
+                db.execute("""CREATE TABLE patient_meetings (
+                    patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+                    meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+                    organization_id TEXT NOT NULL, linked_by TEXT NOT NULL REFERENCES users(id),
+                    created_at TEXT NOT NULL, PRIMARY KEY(patient_id,meeting_id)
+                )""")
+                db.execute("CREATE INDEX patient_meetings_meeting ON patient_meetings(organization_id,meeting_id,patient_id)")
+                db.execute("PRAGMA user_version=7")
+            if current < 8:
+                db.execute("""CREATE TABLE artifacts (
+                    id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
+                    meeting_id TEXT NOT NULL REFERENCES meetings(id), transcript_revision INTEGER NOT NULL,
+                    decision_sha256 TEXT NOT NULL, storage_key TEXT NOT NULL UNIQUE,
+                    mime_type TEXT NOT NULL, sha256 TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('ready','superseded','revoked')),
+                    approved_by TEXT NOT NULL REFERENCES users(id), approved_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )""")
+                db.execute("CREATE INDEX artifacts_meeting_revision ON artifacts(meeting_id,transcript_revision,created_at)")
+                db.execute("PRAGMA user_version=8")
+            if current < 9:
+                db.execute("""CREATE TABLE capture_sessions (
+                    id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
+                    meeting_id TEXT NOT NULL REFERENCES meetings(id), asset_id TEXT NOT NULL UNIQUE,
+                    created_by TEXT NOT NULL REFERENCES users(id), content_type TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('capturing','sealing','sealed','failed')),
+                    next_sequence INTEGER NOT NULL DEFAULT 0, received_bytes INTEGER NOT NULL DEFAULT 0,
+                    error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                )""")
+                db.execute("CREATE INDEX capture_sessions_meeting ON capture_sessions(organization_id,meeting_id,created_at)")
+                db.execute("""CREATE TABLE capture_chunks (
+                    session_id TEXT NOT NULL REFERENCES capture_sessions(id) ON DELETE CASCADE,
+                    sequence INTEGER NOT NULL, storage_key TEXT NOT NULL UNIQUE,
+                    size_bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, created_at TEXT NOT NULL,
+                    PRIMARY KEY(session_id,sequence)
+                )""")
+                db.execute("PRAGMA user_version=9")
+            if current < 10:
+                db.execute("""CREATE TABLE deletion_audit (
+                    id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, actor_id TEXT NOT NULL,
+                    subject_type TEXT NOT NULL, subject_id TEXT NOT NULL, action TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )""")
+                db.execute("CREATE INDEX deletion_audit_org_time ON deletion_audit(organization_id,created_at)")
+                db.execute("""CREATE TABLE file_cleanup (
+                    storage_key TEXT PRIMARY KEY, queued_at TEXT NOT NULL
+                )""")
+                db.execute("PRAGMA user_version=10")
 
     def asset_path(self, meeting_id: str, asset_id: str, suffix: str) -> Path:
         # IDs are generated locally; never put an uploaded name into a filesystem path.
@@ -183,7 +245,177 @@ class Storage:
                 (meeting_id,organization_id,user_id,permission,granted_by,created_at)
                 VALUES(?,?,?,'owner',?,?)""",
                 (row["id"], row["organization_id"], principal["id"], principal["id"], now))
+            for patient_id in dict.fromkeys(data.get("patientLinkIds", [])):
+                patient = db.execute("""SELECT p.id FROM patients p WHERE p.id=? AND p.organization_id=? AND
+                    (p.created_by=? OR EXISTS (SELECT 1 FROM patient_meetings pm
+                      JOIN meeting_grants mg ON mg.meeting_id=pm.meeting_id AND mg.organization_id=pm.organization_id
+                      WHERE pm.patient_id=p.id AND pm.organization_id=p.organization_id
+                        AND mg.user_id=? AND mg.organization_id=?))""",
+                    (patient_id, row["organization_id"], principal["id"], principal["id"],
+                     row["organization_id"])).fetchone()
+                if not patient:
+                    raise ValueError("A selected patient is unavailable")
+                db.execute("""INSERT INTO patient_meetings
+                    (patient_id,meeting_id,organization_id,linked_by,created_at) VALUES(?,?,?,?,?)""",
+                    (patient_id, row["id"], row["organization_id"], principal["id"], now))
         return row
+
+    def meeting_patient_ids(self, meeting_id: str, organization_id: str) -> list[str]:
+        with closing(self.connect()) as db:
+            rows = db.execute("SELECT patient_id FROM patient_meetings WHERE meeting_id=? AND organization_id=? ORDER BY patient_id",
+                              (meeting_id, organization_id)).fetchall()
+            return [row["patient_id"] for row in rows]
+
+    def create_artifact(self, meeting_id: str, organization_id: str, actor_id: str,
+                        transcript_revision: int, decisions: dict, content: bytes) -> dict | None:
+        artifact_id = str(uuid.uuid4())
+        directory = self.root / "artifacts" / meeting_id
+        directory.mkdir(parents=True, exist_ok=True)
+        destination = directory / f"{artifact_id}.html"
+        temporary = None
+        committed = False
+        decision_json = json.dumps(decisions, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        decision_digest = hashlib.sha256(decision_json.encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(content).hexdigest()
+        now = timestamp()
+        try:
+            with tempfile.NamedTemporaryFile(mode="wb", dir=directory, prefix=f".{artifact_id}-", suffix=".tmp", delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            with self.transaction() as db:
+                meeting = db.execute("SELECT transcript_revision FROM meetings WHERE id=? AND organization_id=?",
+                                     (meeting_id, organization_id)).fetchone()
+                permission = db.execute("SELECT permission FROM meeting_grants WHERE meeting_id=? AND organization_id=? AND user_id=?",
+                                        (meeting_id, organization_id, actor_id)).fetchone()
+                decision_row = db.execute("""SELECT d.result_json FROM decision_results d JOIN jobs j
+                    ON j.id=d.job_id AND j.state='ready' JOIN meetings m ON m.id=d.meeting_id
+                    WHERE d.meeting_id=? AND d.organization_id=? AND d.transcript_revision=m.transcript_revision
+                    ORDER BY d.created_at DESC,d.job_id DESC LIMIT 1""", (meeting_id, organization_id)).fetchone()
+                if (not meeting or meeting["transcript_revision"] != transcript_revision or
+                        not permission or permission["permission"] not in {"owner", "editor"} or not decision_row):
+                    return None
+                current_json = json.dumps(json.loads(decision_row["result_json"]), ensure_ascii=False,
+                                          sort_keys=True, separators=(",", ":"))
+                if hashlib.sha256(current_json.encode("utf-8")).hexdigest() != decision_digest:
+                    return None
+                os.replace(temporary, destination)
+                temporary = None
+                row = {"id": artifact_id, "organization_id": organization_id, "meeting_id": meeting_id,
+                       "transcript_revision": transcript_revision, "decision_sha256": decision_digest,
+                       "storage_key": self.relative_key(destination), "mime_type": "text/html; charset=utf-8",
+                       "sha256": digest, "status": "ready", "approved_by": actor_id,
+                       "approved_at": now, "created_at": now}
+                db.execute("""INSERT INTO artifacts
+                    (id,organization_id,meeting_id,transcript_revision,decision_sha256,storage_key,mime_type,sha256,
+                     status,approved_by,approved_at,created_at)
+                    VALUES(:id,:organization_id,:meeting_id,:transcript_revision,:decision_sha256,:storage_key,:mime_type,:sha256,
+                           :status,:approved_by,:approved_at,:created_at)""", row)
+            committed = True
+            return row
+        finally:
+            if temporary:
+                temporary.unlink(missing_ok=True)
+            if not committed:
+                destination.unlink(missing_ok=True)
+
+    def latest_artifact(self, meeting_id: str, organization_id: str) -> dict | None:
+        with closing(self.connect()) as db:
+            row = db.execute("""SELECT a.* FROM artifacts a JOIN meetings m ON m.id=a.meeting_id
+                WHERE a.meeting_id=? AND a.organization_id=? AND a.status='ready'
+                  AND a.transcript_revision=m.transcript_revision
+                ORDER BY a.created_at DESC,a.id DESC LIMIT 1""", (meeting_id, organization_id)).fetchone()
+            return dict(row) if row else None
+
+    def get_artifact(self, artifact_id: str, organization_id: str) -> dict | None:
+        with closing(self.connect()) as db:
+            row = db.execute("SELECT * FROM artifacts WHERE id=? AND organization_id=?",
+                             (artifact_id, organization_id)).fetchone()
+            return dict(row) if row else None
+
+    def artifact_path(self, storage_key: str) -> Path:
+        path = self.resolve_key(storage_key)
+        if not path.is_file():
+            raise FileNotFoundError("Artifact file is missing")
+        return path
+
+    def purge_meeting(self, meeting_id: str, organization_id: str, actor_id: str) -> int | None:
+        """Revoke a meeting and all app-managed derivatives; return cleanup queue size."""
+        with self.transaction() as db:
+            meeting = db.execute("""SELECT m.id,g.permission FROM meetings m JOIN meeting_grants g
+                ON g.meeting_id=m.id AND g.organization_id=m.organization_id
+                WHERE m.id=? AND m.organization_id=? AND g.user_id=?""",
+                (meeting_id, organization_id, actor_id)).fetchone()
+            if not meeting or meeting["permission"] != "owner":
+                return None
+            db.execute("UPDATE jobs SET state='cancelled',stage='cancelled',lease_owner=NULL,lease_until=NULL,updated_at=? WHERE meeting_id=? AND state='queued'",
+                       (timestamp(), meeting_id))
+            active = db.execute("SELECT 1 FROM jobs WHERE meeting_id=? AND state='running' LIMIT 1",
+                                (meeting_id,)).fetchone()
+            if active:
+                # In-flight model processes may still hold source files open. Refuse deletion
+                # until inference reaches its next lease check and releases those files.
+                raise RuntimeError("MEETING_PROCESSING")
+            job_ids = [row["id"] for row in db.execute("SELECT id FROM jobs WHERE meeting_id=?", (meeting_id,))]
+            paths = set()
+            for row in db.execute("SELECT source_key,decoded_key FROM assets WHERE meeting_id=?", (meeting_id,)):
+                paths.update((row["source_key"], row["decoded_key"]))
+            asset_directory = self.assets_dir / meeting_id
+            if asset_directory.is_dir():
+                paths.update(self.relative_key(path) for path in asset_directory.rglob("*") if path.is_file())
+            for job_id in job_ids:
+                paths.add(self.relative_key(self.asset_path(meeting_id, job_id, ".transcript.json")))
+            paths.update(row["storage_key"] for row in db.execute(
+                "SELECT storage_key FROM artifacts WHERE meeting_id=?", (meeting_id,)))
+            for capture in db.execute("SELECT id FROM capture_sessions WHERE meeting_id=?", (meeting_id,)):
+                directory = self.root / "captures" / capture["id"]
+                if directory.is_dir():
+                    paths.update(self.relative_key(path) for path in directory.iterdir() if path.is_file())
+            db.execute("DELETE FROM segment_revisions WHERE meeting_id=?", (meeting_id,))
+            db.execute("DELETE FROM segments WHERE meeting_id=?", (meeting_id,))
+            db.execute("DELETE FROM artifacts WHERE meeting_id=?", (meeting_id,))
+            db.execute("DELETE FROM capture_sessions WHERE meeting_id=?", (meeting_id,))
+            db.execute("DELETE FROM jobs WHERE meeting_id=?", (meeting_id,))
+            db.execute("DELETE FROM assets WHERE meeting_id=?", (meeting_id,))
+            db.execute("DELETE FROM patient_meetings WHERE meeting_id=?", (meeting_id,))
+            db.execute("DELETE FROM meeting_grants WHERE meeting_id=?", (meeting_id,))
+            db.execute("DELETE FROM meetings WHERE id=?", (meeting_id,))
+            for key in paths:
+                db.execute("INSERT OR IGNORE INTO file_cleanup(storage_key,queued_at) VALUES(?,?)",
+                           (key, timestamp()))
+            db.execute("""INSERT INTO deletion_audit
+                (id,organization_id,actor_id,subject_type,subject_id,action,created_at)
+                VALUES(?,?,?,?,?,?,?)""",
+                (str(uuid.uuid4()), organization_id, actor_id, "meeting", meeting_id, "purge_requested", timestamp()))
+        return self.flush_file_cleanup()
+
+    def flush_file_cleanup(self) -> int:
+        """Best-effort unlink queued files; locked files remain queued for retry."""
+        removed = 0
+        with closing(self.connect()) as db:
+            keys = [row["storage_key"] for row in db.execute("SELECT storage_key FROM file_cleanup")]
+        for key in keys:
+            try:
+                self.resolve_key(key).unlink(missing_ok=True)
+            except (OSError, ValueError):
+                continue
+            with self.transaction() as db:
+                db.execute("DELETE FROM file_cleanup WHERE storage_key=?", (key,))
+            removed += 1
+        for parent in (self.root / "artifacts", self.root / "captures", self.assets_dir):
+            if parent.exists():
+                for directory in sorted((path for path in parent.rglob("*") if path.is_dir()), reverse=True):
+                    try:
+                        directory.rmdir()
+                    except OSError:
+                        pass
+        with closing(self.connect()) as db:
+            pending = db.execute("SELECT COUNT(*) FROM file_cleanup").fetchone()[0]
+        if pending == 0:
+            with closing(self.connect()) as db:
+                db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return pending
 
     def installation_organization(self) -> str:
         with closing(self.connect()) as db:
@@ -337,6 +569,192 @@ class Storage:
                  :channels,:sample_rate_hz,:created_at,:kind,:decode_warning)""", row)
         return row
 
+    def create_capture_session(self, meeting_id: str, organization_id: str, actor_id: str,
+                               content_type: str) -> dict:
+        if content_type not in {"audio/webm", "audio/webm;codecs=opus", "audio/mp4", "audio/wav"}:
+            raise ValueError("Unsupported microphone recording format")
+        now, session_id, asset_id = timestamp(), str(uuid.uuid4()), str(uuid.uuid4())
+        row = {"id": session_id, "organization_id": organization_id, "meeting_id": meeting_id,
+               "asset_id": asset_id, "created_by": actor_id, "content_type": content_type,
+               "state": "capturing", "next_sequence": 0, "received_bytes": 0,
+               "error_code": None, "created_at": now, "updated_at": now}
+        with self.transaction() as db:
+            db.execute("""INSERT INTO capture_sessions
+                (id,organization_id,meeting_id,asset_id,created_by,content_type,state,next_sequence,received_bytes,error_code,created_at,updated_at)
+                VALUES(:id,:organization_id,:meeting_id,:asset_id,:created_by,:content_type,:state,:next_sequence,:received_bytes,:error_code,:created_at,:updated_at)""", row)
+        return row
+
+    def get_capture_session(self, session_id: str, organization_id: str) -> dict | None:
+        with closing(self.connect()) as db:
+            row = db.execute("SELECT * FROM capture_sessions WHERE id=? AND organization_id=?",
+                             (session_id, organization_id)).fetchone()
+            if not row:
+                return None
+            result = dict(row)
+            chunks = db.execute("SELECT * FROM capture_chunks WHERE session_id=? ORDER BY sequence",
+                                (session_id,)).fetchall()
+            result["chunks"] = [dict(chunk) for chunk in chunks]
+            return result
+
+    def list_open_captures(self, meeting_id: str, organization_id: str) -> list[dict]:
+        with closing(self.connect()) as db:
+            rows = db.execute("""SELECT id,state,next_sequence,received_bytes,error_code,created_at
+                FROM capture_sessions WHERE meeting_id=? AND organization_id=? AND state!='sealed'
+                ORDER BY created_at,id""", (meeting_id, organization_id)).fetchall()
+            return [dict(row) for row in rows]
+
+    def delete_capture(self, session_id: str, organization_id: str, actor_id: str) -> bool:
+        with self.transaction() as db:
+            session = db.execute("""SELECT c.state,g.permission FROM capture_sessions c JOIN meeting_grants g
+                ON g.meeting_id=c.meeting_id AND g.organization_id=c.organization_id
+                WHERE c.id=? AND c.organization_id=? AND g.user_id=?""",
+                (session_id, organization_id, actor_id)).fetchone()
+            if not session or session["permission"] not in {"owner", "editor"} or session["state"] == "sealed":
+                return False
+            chunks = db.execute("SELECT storage_key FROM capture_chunks WHERE session_id=?", (session_id,)).fetchall()
+            db.execute("DELETE FROM capture_sessions WHERE id=?", (session_id,))
+        for chunk in chunks:
+            self.resolve_key(chunk["storage_key"]).unlink(missing_ok=True)
+        directory = (self.root / "captures" / session_id).resolve()
+        if directory.is_relative_to(self.root):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+        return True
+
+    def capture_chunk_path(self, session_id: str, sequence: int) -> Path:
+        directory = (self.root / "captures" / session_id).resolve()
+        if not directory.is_relative_to(self.root):
+            raise ValueError("Capture path escapes data directory")
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory / f"{sequence:06d}.chunk"
+
+    def store_capture_chunk(self, session_id: str, organization_id: str, actor_id: str,
+                            sequence: int, content: bytes) -> dict:
+        if not content or len(content) > 32 * 1024 * 1024:
+            raise ValueError("Capture chunk must be between 1 byte and 32 MiB")
+        digest = hashlib.sha256(content).hexdigest()
+        destination = self.capture_chunk_path(session_id, sequence)
+        temporary = None
+        moved = False
+        try:
+            with tempfile.NamedTemporaryFile(mode="wb", dir=destination.parent, prefix=".chunk-", suffix=".tmp", delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            with self.transaction() as db:
+                session = db.execute("""SELECT c.*,g.permission FROM capture_sessions c JOIN meeting_grants g
+                    ON g.meeting_id=c.meeting_id AND g.organization_id=c.organization_id
+                    WHERE c.id=? AND c.organization_id=? AND g.user_id=?""",
+                    (session_id, organization_id, actor_id)).fetchone()
+                if not session or session["permission"] not in {"owner", "editor"}:
+                    raise LookupError("Capture not found")
+                previous = db.execute("SELECT sha256,size_bytes FROM capture_chunks WHERE session_id=? AND sequence=?",
+                                      (session_id, sequence)).fetchone()
+                if sequence < session["next_sequence"]:
+                    if previous and previous["sha256"] == digest and previous["size_bytes"] == len(content):
+                        return {"idempotent": True, "nextSequence": session["next_sequence"],
+                                "receivedBytes": session["received_bytes"]}
+                    raise ValueError("Capture sequence was already stored with different bytes")
+                if session["state"] != "capturing":
+                    raise ValueError("Capture session is not accepting chunks")
+                if sequence != session["next_sequence"]:
+                    raise ValueError("Capture chunks must arrive in sequence")
+                if session["received_bytes"] + len(content) > MAX_CAPTURE_BYTES:
+                    raise OverflowError("Capture exceeds the 2 GiB limit")
+                os.replace(temporary, destination)
+                temporary = None
+                moved = True
+                db.execute("""INSERT INTO capture_chunks(session_id,sequence,storage_key,size_bytes,sha256,created_at)
+                    VALUES(?,?,?,?,?,?)""", (session_id, sequence, self.relative_key(destination), len(content), digest, timestamp()))
+                received = session["received_bytes"] + len(content)
+                next_sequence = sequence + 1
+                db.execute("UPDATE capture_sessions SET next_sequence=?,received_bytes=?,updated_at=? WHERE id=?",
+                           (next_sequence, received, timestamp(), session_id))
+            return {"idempotent": False, "nextSequence": next_sequence, "receivedBytes": received}
+        finally:
+            if temporary:
+                temporary.unlink(missing_ok=True)
+            if moved:
+                with closing(self.connect()) as db:
+                    stored = db.execute("SELECT 1 FROM capture_chunks WHERE session_id=? AND sequence=?",
+                                        (session_id, sequence)).fetchone()
+                if not stored:
+                    destination.unlink(missing_ok=True)
+
+    def begin_capture_seal(self, session_id: str, organization_id: str, actor_id: str,
+                           expected_sequence_count: int) -> dict:
+        with self.transaction() as db:
+            row = db.execute("""SELECT c.*,g.permission FROM capture_sessions c JOIN meeting_grants g
+                ON g.meeting_id=c.meeting_id AND g.organization_id=c.organization_id
+                WHERE c.id=? AND c.organization_id=? AND g.user_id=?""",
+                (session_id, organization_id, actor_id)).fetchone()
+            if not row or row["permission"] not in {"owner", "editor"}:
+                raise LookupError("Capture not found")
+            if row["state"] == "sealed":
+                asset = db.execute("SELECT * FROM assets WHERE id=? AND organization_id=?",
+                                   (row["asset_id"], organization_id)).fetchone()
+                return {"state": "sealed", "asset": dict(asset) if asset else None}
+            if expected_sequence_count < 1 or expected_sequence_count != row["next_sequence"]:
+                raise ValueError("Capture is incomplete; one or more chunks are missing")
+            chunks = db.execute("SELECT * FROM capture_chunks WHERE session_id=? ORDER BY sequence",
+                                (session_id,)).fetchall()
+            if len(chunks) != expected_sequence_count or any(chunk["sequence"] != index for index, chunk in enumerate(chunks)):
+                raise ValueError("Capture chunk sequence is incomplete")
+            db.execute("UPDATE capture_sessions SET state='sealing',error_code=NULL,updated_at=? WHERE id=?",
+                       (timestamp(), session_id))
+            result = dict(row)
+            result["chunks"] = [dict(chunk) for chunk in chunks]
+            return result
+
+    def fail_capture(self, session_id: str, error_code: str) -> None:
+        with self.transaction() as db:
+            db.execute("UPDATE capture_sessions SET state='failed',error_code=?,updated_at=? WHERE id=? AND state!='sealed'",
+                       (error_code, timestamp(), session_id))
+
+    def complete_capture(self, session_id: str, organization_id: str, actor_id: str, details: dict) -> dict:
+        session = self.get_capture_session(session_id, organization_id)
+        if not session:
+            raise LookupError("Capture not found")
+        destination_keys = [chunk["storage_key"] for chunk in session["chunks"]]
+        row = {"id": session["asset_id"], "organization_id": organization_id, "meeting_id": session["meeting_id"],
+               "source_key": details["source_key"], "source_sha256": details["source_sha256"],
+               "decoded_key": details["decoded_key"], "duration_ms": details["duration_ms"],
+               "source_offset_ms": details["source_offset_ms"], "size_bytes": details["size_bytes"],
+               "media_type": details["media_type"], "audio_track_index": details["audio_track_index"],
+               "channels": details.get("channels"), "sample_rate_hz": details.get("sample_rate_hz"),
+               "created_at": timestamp(), "kind": "audio", "decode_warning": details.get("decode_warning")}
+        with self.transaction() as db:
+            current = db.execute("""SELECT c.state,g.permission FROM capture_sessions c JOIN meeting_grants g
+                ON g.meeting_id=c.meeting_id AND g.organization_id=c.organization_id
+                WHERE c.id=? AND c.organization_id=? AND g.user_id=?""",
+                (session_id, organization_id, actor_id)).fetchone()
+            if not current or current["permission"] not in {"owner", "editor"}:
+                raise LookupError("Capture not found")
+            if current["state"] == "sealed":
+                asset = db.execute("SELECT * FROM assets WHERE id=?", (session["asset_id"],)).fetchone()
+                return dict(asset)
+            if current["state"] != "sealing":
+                raise ValueError("Capture is not ready to seal")
+            db.execute("""INSERT INTO assets
+                (id,organization_id,meeting_id,source_key,source_sha256,decoded_key,duration_ms,
+                 source_offset_ms,size_bytes,media_type,audio_track_index,channels,sample_rate_hz,created_at,kind,decode_warning)
+                VALUES (:id,:organization_id,:meeting_id,:source_key,:source_sha256,:decoded_key,
+                 :duration_ms,:source_offset_ms,:size_bytes,:media_type,:audio_track_index,
+                 :channels,:sample_rate_hz,:created_at,:kind,:decode_warning)""", row)
+            db.execute("UPDATE capture_sessions SET state='sealed',asset_id=?,error_code=NULL,updated_at=? WHERE id=?",
+                       (row["id"], timestamp(), session_id))
+            db.execute("DELETE FROM capture_chunks WHERE session_id=?", (session_id,))
+        for key in destination_keys:
+            self.resolve_key(key).unlink(missing_ok=True)
+        try:
+            self.capture_chunk_path(session_id, 0).parent.rmdir()
+        except OSError:
+            pass
+        return row
+
     def latest_asset(self, meeting_id: str, organization_id: str) -> dict | None:
         with closing(self.connect()) as db:
             row = db.execute("SELECT * FROM assets WHERE meeting_id=? AND organization_id=? ORDER BY created_at DESC, id DESC LIMIT 1", (meeting_id, organization_id)).fetchone()
@@ -351,7 +769,9 @@ class Storage:
         with self.transaction() as db:
             config_json = json.dumps(config, sort_keys=True)
             existing = db.execute("""SELECT * FROM jobs WHERE meeting_id=? AND organization_id=? AND asset_id=?
-                AND (state IN ('queued','running') OR (state='ready' AND model_config_json=?))
+                AND (state IN ('queued','running') OR (state='ready' AND model_config_json=? AND EXISTS (
+                    SELECT 1 FROM decision_results d WHERE d.job_id=jobs.id
+                      AND d.transcript_revision=(SELECT transcript_revision FROM meetings WHERE id=jobs.meeting_id))))
                 ORDER BY created_at DESC LIMIT 1""",
                 (meeting_id, organization_id, asset_id, config_json)).fetchone()
             if existing:
@@ -463,32 +883,103 @@ class Storage:
 
     def revise_segment(self, meeting_id: str, organization_id: str, segment_id: str,
                        editor_id: str, transcript_revision: int, text: str) -> dict | None:
-        clean = text.strip()
-        if not clean or len(clean) > 5000:
-            raise ValueError("Transcript text must be 1–5000 characters")
+        rows = self.revise_segments(meeting_id, organization_id, editor_id, transcript_revision,
+                                    [{"segmentId": segment_id, "text": text}])
+        return rows[0] if rows else None
+
+    def revise_segments(self, meeting_id: str, organization_id: str, editor_id: str,
+                        transcript_revision: int, corrections: list[dict]) -> list[dict] | None:
+        cleaned = []
+        seen = set()
+        for correction in corrections:
+            segment_id, text = correction["segmentId"], correction["text"].strip()
+            if not text or len(text) > 5000:
+                raise ValueError("Transcript text must be 1–5000 characters")
+            if segment_id in seen:
+                raise ValueError("A transcript passage can be corrected only once per batch")
+            seen.add(segment_id)
+            cleaned.append((segment_id, text))
         with self.transaction() as db:
             meeting = db.execute("SELECT transcript_revision FROM meetings WHERE id=? AND organization_id=?",
                                  (meeting_id, organization_id)).fetchone()
             if not meeting or meeting["transcript_revision"] != transcript_revision:
                 return None
-            segment = db.execute("""SELECT * FROM segments WHERE id=? AND meeting_id=? AND organization_id=?
-                AND transcript_revision=?""", (segment_id, meeting_id, organization_id, transcript_revision)).fetchone()
-            if not segment:
+            segments = []
+            for segment_id, text in cleaned:
+                segment = db.execute("""SELECT * FROM segments WHERE id=? AND meeting_id=? AND organization_id=?
+                    AND transcript_revision=?""", (segment_id, meeting_id, organization_id, transcript_revision)).fetchone()
+                if not segment:
+                    return None
+                segments.append((segment, text))
+            if not segments:
                 return None
             next_revision = transcript_revision + 1
-            db.execute("""INSERT INTO segment_revisions(id,organization_id,meeting_id,segment_id,editor_id,
-                from_revision,to_revision,old_text,new_text,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                (str(uuid.uuid4()), organization_id, meeting_id, segment_id, editor_id, transcript_revision,
-                 next_revision, segment["text"], clean, timestamp()))
             db.execute("UPDATE segments SET transcript_revision=? WHERE meeting_id=? AND transcript_revision=?",
                        (next_revision, meeting_id, transcript_revision))
-            db.execute("UPDATE segments SET text=? WHERE id=?", (clean, segment_id))
+            for segment, text in segments:
+                db.execute("""INSERT INTO segment_revisions(id,organization_id,meeting_id,segment_id,editor_id,
+                    from_revision,to_revision,old_text,new_text,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    (str(uuid.uuid4()), organization_id, meeting_id, segment["id"], editor_id, transcript_revision,
+                     next_revision, segment["text"], text, timestamp()))
+                db.execute("UPDATE segments SET text=? WHERE id=?", (text, segment["id"]))
             db.execute("UPDATE meetings SET transcript_revision=?,status='transcript_review',updated_at=? WHERE id=?",
                        (next_revision, timestamp(), meeting_id))
-            row = db.execute("SELECT * FROM segments WHERE id=?", (segment_id,)).fetchone()
-            item = dict(row)
-            item["words"] = json.loads(item.pop("words_json"))
-            return item
+            db.execute("UPDATE artifacts SET status='superseded' WHERE meeting_id=? AND status='ready'",
+                       (meeting_id,))
+            rows = db.execute("SELECT * FROM segments WHERE meeting_id=? AND transcript_revision=? ORDER BY start_ms,id",
+                              (meeting_id, next_revision)).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                item["words"] = json.loads(item.pop("words_json"))
+                result.append(item)
+            return result
+
+    def undo_transcript_revision(self, meeting_id: str, organization_id: str, editor_id: str,
+                                 transcript_revision: int) -> list[dict] | None:
+        with self.transaction() as db:
+            meeting = db.execute("SELECT transcript_revision FROM meetings WHERE id=? AND organization_id=?",
+                                 (meeting_id, organization_id)).fetchone()
+            if not meeting or meeting["transcript_revision"] != transcript_revision:
+                return None
+            revisions = db.execute("""SELECT r.* FROM segment_revisions r
+                WHERE r.meeting_id=? AND r.organization_id=? AND r.to_revision=? ORDER BY r.created_at,r.id""",
+                (meeting_id, organization_id, transcript_revision)).fetchall()
+            if not revisions:
+                return None
+            next_revision = transcript_revision + 1
+            for revision in revisions:
+                segment = db.execute("SELECT * FROM segments WHERE id=? AND meeting_id=? AND transcript_revision=?",
+                                     (revision["segment_id"], meeting_id, transcript_revision)).fetchone()
+                if not segment or segment["text"] != revision["new_text"]:
+                    return None
+            for revision in revisions:
+                segment = db.execute("SELECT text FROM segments WHERE id=?", (revision["segment_id"],)).fetchone()
+                db.execute("""INSERT INTO segment_revisions(id,organization_id,meeting_id,segment_id,editor_id,
+                    from_revision,to_revision,old_text,new_text,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    (str(uuid.uuid4()), organization_id, meeting_id, revision["segment_id"], editor_id,
+                     transcript_revision, next_revision, segment["text"], revision["old_text"], timestamp()))
+                db.execute("UPDATE segments SET text=? WHERE id=?", (revision["old_text"], revision["segment_id"]))
+            db.execute("UPDATE segments SET transcript_revision=? WHERE meeting_id=? AND transcript_revision=?",
+                       (next_revision, meeting_id, transcript_revision))
+            db.execute("UPDATE meetings SET transcript_revision=?,status='transcript_review',updated_at=? WHERE id=?",
+                       (next_revision, timestamp(), meeting_id))
+            db.execute("UPDATE artifacts SET status='superseded' WHERE meeting_id=? AND status='ready'", (meeting_id,))
+            rows = db.execute("SELECT * FROM segments WHERE meeting_id=? AND transcript_revision=? ORDER BY start_ms,id",
+                              (meeting_id, next_revision)).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                item["words"] = json.loads(item.pop("words_json"))
+                result.append(item)
+            return result
+
+    def can_undo_transcript_revision(self, meeting_id: str, organization_id: str,
+                                     transcript_revision: int) -> bool:
+        with closing(self.connect()) as db:
+            return db.execute("""SELECT 1 FROM segment_revisions
+                WHERE meeting_id=? AND organization_id=? AND to_revision=? LIMIT 1""",
+                (meeting_id, organization_id, transcript_revision)).fetchone() is not None
 
     def save_decisions(self, job: dict, worker_id: str, result: dict) -> None:
         with self.transaction() as db:
