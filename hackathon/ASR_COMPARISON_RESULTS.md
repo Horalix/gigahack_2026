@@ -8,10 +8,13 @@
 |---|---|---:|---:|---:|---:|---:|
 | Whisper large-v3, historical app run | Forced `ro`; `int8_float16`, beam 5, whole-file, word timestamps | **47.9%** (873/1,824 word edits) | **29.9%** | **74.7s** | **6.4 min** | 3,293 MiB |
 | Whisper large-v3, current app `laptop8` | Forced `ro`; `float16`, beam 5, batch 1, whole-file, word timestamps | **51.8%** (945/1,824) | **33.3%** (2,414/7,256 chars) | **118.6s** | **10.1 min** | 5,275 MiB |
+| Whisper large-v3, tuning probe | Forced `ro`; `float16`, beam 1, batch 1, whole-file, word timestamps | 59.7% (1,089/1,824) | 39.3% (2,854/7,256 chars) | 129.2s | 11.0 min | 5,307 MiB |
 | OmniASR CTC 1B v2, WSL | No language conditioning supported; 24 sequential 30s windows, BF16 | 72.6% (1,325/1,824) | 52.6% | 15.2s | 1.3 min | 2,989 MiB |
 | OmniASR LLM 1B v2, WSL | Forced `ron_Latn`; 24 sequential 30s windows, BF16 | 66.9% (1,221/1,824) | 46.4% | 276.0s | 23.6 min | 5,603 MiB |
 
 The current app Whisper score is 15.1 percentage points lower WER than the language-conditioned Omni LLM, and 20.8 points lower than Omni CTC. The historical `int8_float16` Whisper run scored 3.9 points better than the current FP16 profile, but that precision failed a real 60-second inference smoke on the pinned local CUDA stack; the current profile therefore uses FP16. The controlled WSL Whisper-window run was stopped after more than 12 minutes without completing; its timing is not reported as a completed run. Timings are descriptive, not a strict speed ranking: Whisper ran natively on Windows; Omni ran under WSL, and windowing differed. All completed candidates used the same audio and saved Romanian reference with the same scoring normalizer.
+
+The beam-1 tuning probe used the exact same WAV and reference as current `laptop8` beam 5. In this single run it was 10.6s slower and 7.9 percentage points worse in WER; run-to-run variation was not measured. Keep beam 5. This small tuning probe is not a model replacement or repeated performance qualification.
 
 ## How to read this
 
