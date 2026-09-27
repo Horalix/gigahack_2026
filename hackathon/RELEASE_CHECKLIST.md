@@ -10,7 +10,7 @@
 - [x] Transcript edits, bulk replacement, undo, search and source-audio passage seeking are implemented.
 - [x] Approval creates a revisioned, checksummed HTML artifact.
 - [x] Laptop ASR batch 2 passed two identical runs on the same 702.549s Romanian WAV; WER 51.64%, CER 35.28% against the saved machine reference.
-- [x] `python -m pytest services/meeting/tests -q`: 54 passed.
+- [x] `python -m pytest services/meeting/tests -q`: 56 passed.
 - [x] `npm run test:ui`: 6 passed, including stale setup recovery, mocked provisional words during microphone capture and correction/undo invalidation behavior.
 - [x] `npm run check`: 0 errors/warnings; `npm run build`: passed.
 - [x] `scripts/hackathon/preflight.ps1 -ProfileId laptop8`: passed on this RTX 3070 Ti laptop.
@@ -18,7 +18,7 @@
 
 ## Must remain disclosed as open
 
-- [ ] Full one-hour upload-to-approved-file timing at or below 15 minutes. Current batch-2 integrated app took 123s for 11m43s, a 10.5 min/hour projection. No one-hour test or email-receipt measurement has been completed.
+- [ ] Full one-hour upload-to-approved-file timing at or below 15 minutes. Current batch-2 integrated app took 123s for 11m43s at its default 8,192-token context; a 4,096-token test took 141s with 6.75 GiB minimum free RAM. These are single-sample projections; no genuine one-hour test or email-receipt measurement has been completed.
 - [ ] RTX 5080 / 16 GB host test. `hospital16` batch 4 and CUDA 13 are configured but not physically verified here.
 - [ ] WAN-disconnected launch and external-egress observation on the final demo build.
 - [ ] Physical microphone recording, permission-loss and user-visible preview-lag behavior on the demo device. Mocked UI plus one real sample-window API test pass, but no ambient/microphone run has been performed.
