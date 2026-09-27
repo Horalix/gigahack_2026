@@ -47,7 +47,7 @@ Use [the live handoff](../10-team-handoff.md) for the current parallel order. A 
 | [009 — Extract evidence-backed final decisions locally](PBI-009-local-llm-and-final-decisions.md) | P0 | Sol / High | 001, 003; 004 for audio-to-decisions acceptance | OPEN |
 | [010 — Generate a final document for Affan](PBI-010-final-document-and-artifact-handoff.md) | P0 | Luna / High | 001, 009; fixture rendering can start immediately | OPEN |
 | [011 — Persist live audio and transcribe completed windows](PBI-011-durable-live-audio-backend.md) | P0 | Sol / High | 002, 004, 005 | OPEN |
-| [012 — Record and view live transcripts in the main app](PBI-012-live-recording-ui.md) | P0 | Luna / Medium | 007, 011 | OPEN — meter/chunk progress added; provisional words missing |
+| [012 — Record and view live transcripts in the main app](PBI-012-live-recording-ui.md) | P0 | Luna / Medium | 007, 011 | OPEN — provisional local windows implemented; physical microphone and target performance unverified |
 | [013 — Apply transcript corrections and rebuild dependent output](PBI-013-versioned-transcript-corrections.md) | P0 | Sol / High | 002, 009, 010 | OPEN |
 | [014 — Deliver manual review, audio replay and bulk correction](PBI-014-transcript-review-ui.md) | P0 | Luna / High | 008, 013 | OPEN |
 | [015 — Control local sensitive data and retention](PBI-015-privacy-retention-and-local-data-controls.md) | P0 | Sol / High | 002, 005, 010, 013 | OPEN |

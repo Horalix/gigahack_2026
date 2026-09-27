@@ -13,7 +13,7 @@
 ## Live path
 
 1. Open the patient directory, search the synthetic patient, then open or create a meeting.
-2. Upload the permitted Romanian audio, select Romanian and the laptop profile, and start transcription. If demonstrating microphone capture, show its level and locally acknowledged chunk count; the app transcribes a recording after Stop, so do not describe it as live captions.
+2. Upload the permitted Romanian audio, select Romanian and the laptop profile, and start transcription. If demonstrating microphone capture, show its level, locally acknowledged chunk count and provisional words after the first window. Explain that the complete saved recording is transcribed again after Stop.
 3. Show the original-language transcript, decision/action cards and their source excerpts. Point out that items require human review.
 4. Search for a passage and use its Play control to hear the corresponding source audio. Make one deliberate transcript correction only if the operator can confirm it against the audio; reprocess before approving.
 5. Read the transcript and every suggested item. Then check the review confirmation and download the generated HTML minutes.
