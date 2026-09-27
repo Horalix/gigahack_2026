@@ -1,4 +1,5 @@
 <script lang="ts">
+  import "../app.css";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
   import AppTitlebar from "$lib/components/app-titlebar.svelte";

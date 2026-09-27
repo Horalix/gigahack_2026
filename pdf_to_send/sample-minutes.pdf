@@ -1,0 +1,63 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>
+endobj
+5 0 obj
+<< /Length 533 >>
+stream
+BT
+/F1 11 Tf
+14 TL
+56 780 Td
+(PROCES-VERBAL / MINUTES OF MEETING) Tj
+T*
+() Tj
+T*
+(Meeting type: medical      Date: 2026-09-26) Tj
+T*
+(Recipients:   Medical Board \(med-board\)) Tj
+T*
+() Tj
+T*
+(DECISIONS) Tj
+T*
+(D1  Approve the ultrasound purchase for Cardiology.) Tj
+T*
+(    Owner: Dr. Ivanov     Deadline: 2026-10-15) Tj
+T*
+() Tj
+T*
+(ACTION ITEMS) Tj
+T*
+(A1  Finalize the CT contrast protocol review.) Tj
+T*
+(    Owner: Dr. Ciobanu    Deadline: 2026-10-03) Tj
+T*
+() Tj
+T*
+(-- sample attachment for Mailpit delivery testing --) Tj
+ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000309 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+893
+%%EOF

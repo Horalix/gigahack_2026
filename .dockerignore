@@ -1,0 +1,46 @@
+# Keep the build context small, and keep anything sensitive out of images.
+# An image layer is effectively permanent: anything copied in here can be
+# recovered from the image later, even if a later layer deletes it.
+
+# Recordings, transcripts and generated documents -- never in an image
+example_data/
+pdf_to_send/
+artifacts/
+**/*.m4a
+**/*.wav
+**/*.mp3
+**/*.mp4
+**/*.webm
+**/*.flac
+**/*.ogg
+**/*.zip
+
+# Model weights live outside the repo and are bind-mounted read-only at runtime
+**/*.bin
+**/*.gguf
+**/*.safetensors
+
+# Reference and planning material the running app never reads
+reference/
+docs/
+hackathon/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Tooling state and build output
+.git/
+**/node_modules/
+.svelte-kit/
+build/
+src-tauri/
+**/.pytest_cache/
+**/__pycache__/
+**/*.pyc
+test-results/
+playwright-report/
+.vscode/
+.cargo/
+.github/
