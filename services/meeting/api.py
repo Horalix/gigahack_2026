@@ -342,6 +342,7 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         return {"meeting": meeting_record(meeting, db.meeting_patient_ids(meeting_id, actor["organization_id"])),
                 "permission": db.meeting_permission(meeting_id, actor["id"], actor["organization_id"]),
                 "asset": asset_record(db.latest_asset(meeting_id, actor["organization_id"])),
+                "latestJob": db.latest_job_for_meeting(meeting_id, actor["organization_id"]),
                 "segments": [segment_record(row) for row in db.get_segments(meeting_id, actor["organization_id"])],
                 "decisions": db.get_meeting_decisions(meeting_id, actor["organization_id"]),
                 "canUndoCorrection": db.can_undo_transcript_revision(meeting_id, actor["organization_id"], meeting["transcript_revision"]),

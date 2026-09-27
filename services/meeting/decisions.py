@@ -105,7 +105,7 @@ def _validate_evidence(evidence: object, segments: dict[str, dict], required: bo
     return valid
 
 
-def _validate_events(raw: dict, segments: list[dict]) -> list[dict]:
+def _validate_events(raw: dict, segments: list[dict], *, drop_unsupported_evidence: bool = False) -> list[dict]:
     if set(raw) != {"events"} or not isinstance(raw["events"], list) or len(raw["events"]) > EVENTS_PER_BATCH:
         raise LLMError("LLM_INVALID_OUTPUT", "The local model returned an invalid event list")
     source = {segment["id"]: segment for segment in segments}
@@ -122,9 +122,24 @@ def _validate_events(raw: dict, segments: list[dict]) -> list[dict]:
             if item[key] is not None and (not isinstance(item[key], str) or len(item[key]) > 240):
                 raise LLMError("LLM_INVALID_OUTPUT", "The local model returned an invalid owner or date")
         event = dict(item)
-        event["evidence"] = _validate_evidence(item["evidence"], source, True)
-        event["ownerEvidence"] = _validate_evidence(item["ownerEvidence"], source, False)
-        event["dateEvidence"] = _validate_evidence(item["dateEvidence"], source, False)
+        try:
+            event["evidence"] = _validate_evidence(item["evidence"], source, True)
+        except LLMError as exc:
+            if not drop_unsupported_evidence or exc.code != "LLM_INVALID_EVIDENCE":
+                raise
+            continue
+        try:
+            event["ownerEvidence"] = _validate_evidence(item["ownerEvidence"], source, False)
+        except LLMError as exc:
+            if not drop_unsupported_evidence or exc.code != "LLM_INVALID_EVIDENCE":
+                raise
+            event["ownerText"], event["ownerEvidence"] = None, []
+        try:
+            event["dateEvidence"] = _validate_evidence(item["dateEvidence"], source, False)
+        except LLMError as exc:
+            if not drop_unsupported_evidence or exc.code != "LLM_INVALID_EVIDENCE":
+                raise
+            event["dateExpression"], event["dateEvidence"] = None, []
         owner = item["ownerText"]
         if owner is not None and (len(owner.split()) > 3 or owner.casefold() in OWNER_PRONOUNS):
             owner = None
@@ -254,12 +269,17 @@ def _validate_final(raw: dict, events: list[dict], segments: list[dict], meeting
             "items": output, "requiresHumanReview": True}
 
 
-def _generate_validated(generator, prompt: str, key: str, validate):
+def _generate_validated(generator, prompt: str, key: str, validate, invalid_evidence_fallback=None):
     for attempt in range(2):
+        raw = generator(prompt, key)
         try:
-            return validate(generator(prompt, key))
+            return validate(raw)
         except LLMError as exc:
-            if exc.code != "LLM_INVALID_EVIDENCE" or attempt == 1:
+            if exc.code != "LLM_INVALID_EVIDENCE":
+                raise
+            if attempt == 1:
+                if invalid_evidence_fallback is not None:
+                    return invalid_evidence_fallback(raw)
                 raise
             prompt += (
                 "\nCorrection: the previous response was rejected because its cited quote did not occur "
@@ -282,7 +302,8 @@ def _extract_with_generator(segments: list[dict], meeting: dict, job: dict, gene
         if len(prompt.encode("utf-8")) + output_tokens * 4 > context_size * 4:
             raise LLMError("LLM_INPUT_TOO_LARGE", "The local model prompt exceeds its context limit")
         events.extend(_generate_validated(generator, prompt, "events",
-                                          lambda raw: _validate_events(raw, batch)))
+                                          lambda raw: _validate_events(raw, batch),
+                                          lambda raw: _validate_events(raw, batch, drop_unsupported_evidence=True)))
         if progress:
             progress()
     if len(events) > MAX_FINAL_ITEMS * 2:

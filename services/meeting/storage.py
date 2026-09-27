@@ -793,6 +793,16 @@ class Storage:
             row = db.execute("SELECT * FROM jobs WHERE id=? AND organization_id=?", (job_id, organization_id)).fetchone()
             return dict(row) if row else None
 
+    def latest_job_for_meeting(self, meeting_id: str, organization_id: str) -> dict | None:
+        with closing(self.connect()) as db:
+            row = db.execute("""SELECT id,state,stage,error_code FROM jobs
+                WHERE meeting_id=? AND organization_id=? ORDER BY created_at DESC,id DESC LIMIT 1""",
+                (meeting_id, organization_id)).fetchone()
+            if not row:
+                return None
+            return {"id": row["id"], "state": row["state"], "stage": row["stage"],
+                    "errorCode": row["error_code"]}
+
     def claim_job(self, worker_id: str) -> dict | None:
         now = time.time()
         with self.transaction() as db:
@@ -863,8 +873,18 @@ class Storage:
                 revision = current + 1
             db.execute("DELETE FROM segments WHERE job_id=?", (job["id"],))
             for segment in segments:
+                segment_id = segment["id"]
+                conflict = db.execute("SELECT job_id FROM segments WHERE id=?", (segment_id,)).fetchone()
+                if conflict and conflict["job_id"] != job["id"]:
+                    original_id = segment_id
+                    suffix = 0
+                    while conflict:
+                        source = f"notavra-segment:{job['id']}:{original_id}:{suffix}"
+                        segment_id = str(uuid.uuid5(uuid.NAMESPACE_URL, source))
+                        conflict = db.execute("SELECT job_id FROM segments WHERE id=?", (segment_id,)).fetchone()
+                        suffix += 1
                 db.execute("""INSERT INTO segments VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (segment["id"], job["organization_id"], job["meeting_id"], job["asset_id"], job["id"],
+                    (segment_id, job["organization_id"], job["meeting_id"], job["asset_id"], job["id"],
                      revision, segment["startMs"], segment["endMs"], segment["text"],
                      segment["language"], segment["origin"], json.dumps(segment.get("words", []), ensure_ascii=False), timestamp()))
             db.execute("UPDATE meetings SET transcript_revision=?,updated_at=? WHERE id=?", (revision, timestamp(), job["meeting_id"]))

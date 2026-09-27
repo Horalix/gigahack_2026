@@ -54,23 +54,28 @@ def test_extracts_validated_evidence_and_keeps_all_six_operations(tmp_path):
     assert '"ownerEvidence"' not in prompts[1]
 
 
-def test_rejects_quote_not_in_source_and_publishes_no_partial_result(tmp_path):
-    segments, meeting, job = make_context(["The scan was cancelled."])
+def test_drops_candidate_without_source_evidence_after_one_correction(tmp_path):
+    segments, meeting, job = make_context(["The scan was cancelled.", "Dr. Popescu will call tomorrow."])
     calls = []
 
     def generator(prompt, key):
-        calls.append(prompt)
+        calls.append((prompt, key))
         if key == "events":
-            return {"events": [{"operation": "cancellation", "kind": "action", "text": "Cancel scan",
-                                "ownerText": None, "dateExpression": None,
-                                "evidence": [{"segmentId": "segment-0", "quote": "The scan was confirmed."}],
-                                "ownerEvidence": [], "dateEvidence": []}]}
-        pytest.fail("Final reconciliation must not run after invalid source evidence")
+            return {"events": [
+                {"operation": "cancellation", "kind": "action", "text": "Cancel scan",
+                 "ownerText": None, "dateExpression": None, "evidence": [],
+                 "ownerEvidence": [], "dateEvidence": []},
+                {"operation": "confirmation", "kind": "action", "text": "Call the patient",
+                 "ownerText": None, "dateExpression": None, "evidence": [evidence(segments[1])],
+                 "ownerEvidence": [], "dateEvidence": []},
+            ]}
+        return {"items": [{"status": "confirmed", "eventIndexes": [0], "textEventIndex": 0}]}
 
-    with pytest.raises(LLMError, match="not present"):
-        extract_decisions(segments, meeting, job, tmp_path, generator=generator)
-    assert len(calls) == 2
-    assert "Correction:" in calls[1]
+    result = extract_decisions(segments, meeting, job, tmp_path, generator=generator)
+    assert [item["text"] for item in result["items"]] == ["Call the patient"]
+    assert result["items"][0]["taskEvidence"][0]["quote"] == segments[1]["text"]
+    assert [key for _, key in calls] == ["events", "events", "items"]
+    assert "Correction:" in calls[1][0]
 
 
 def test_retries_invalid_evidence_once_then_accepts_exact_quote(tmp_path):

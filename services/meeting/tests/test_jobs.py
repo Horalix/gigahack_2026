@@ -140,6 +140,46 @@ def test_new_job_freezes_selected_model_settings(tmp_path, monkeypatch):
     assert stored.json()["modelConfig"]["models"]["asr"]["beam_size"] == 3
 
 
+def test_reprocessing_same_asr_segment_ids_creates_a_new_revision(tmp_path, monkeypatch):
+    from services.meeting.adapters import asr
+    from services.meeting import decisions, models
+    from services.meeting.jobs import run_once
+
+    api = client(tmp_path, monkeypatch)
+    meeting_id = meeting(api)
+    upload = api.post(f"/api/meetings/{meeting_id}/audio",
+        files={"file": ("synthetic.wav", short_wav(), "audio/wav")})
+    assert upload.status_code == 201, upload.text
+    monkeypatch.setattr(models, "resolve_profile", lambda profile_id, **kwargs: {
+        "profile_id": profile_id, "models": {"asr": {"path": "synthetic"}, "llm": {"path": "synthetic"}}})
+    monkeypatch.setattr(models, "validate_assets", lambda config, kinds: None)
+    monkeypatch.setattr(asr, "transcribe_audio", lambda *args, **kwargs: {"segments": [{
+        "id": "stable-source-segment", "transcriptRevision": 1, "startMs": 0, "endMs": 500,
+        "text": "Original words", "language": "en", "origin": "asr", "words": [],
+    }], "metrics": {}})
+    monkeypatch.setattr(decisions, "extract_decisions", lambda segments, *args, **kwargs: {
+        "transcriptRevision": segments[0]["transcript_revision"], "modelAlias": "test-llm",
+        "items": [], "requiresHumanReview": True,
+    })
+
+    first_job = api.post(f"/api/meetings/{meeting_id}/jobs", json={"profileId": "laptop8"}).json()
+    store = api.app.state.store
+    assert run_once(store, "worker-first")
+    first_segment = api.get(f"/api/meetings/{meeting_id}").json()["segments"][0]
+    correction = api.put(f"/api/meetings/{meeting_id}/segments/{first_segment['id']}", json={
+        "transcriptRevision": first_segment["transcriptRevision"], "text": "Corrected words",
+    })
+    assert correction.status_code == 200, correction.text
+
+    second_job = api.post(f"/api/meetings/{meeting_id}/jobs", json={"profileId": "laptop8"}).json()
+    assert second_job["id"] != first_job["id"]
+    assert run_once(store, "worker-second")
+    updated = api.get(f"/api/meetings/{meeting_id}").json()["segments"][0]
+    assert updated["id"] != first_segment["id"]
+    assert updated["text"] == "Original words"
+    assert updated["transcriptRevision"] == first_segment["transcriptRevision"] + 2
+
+
 def test_16gb_profile_is_rejected_on_8gb_gpu(tmp_path, monkeypatch):
     import services.meeting.api as api_module
     api = client(tmp_path, monkeypatch)
@@ -333,8 +373,12 @@ def test_worker_reuses_durable_transcript_after_commit_failure(tmp_path, monkeyp
     assert store.get_job(job["id"], org_id)["state"] == "failed"
     assert store.resolve_key(asset["storageKey"]).is_file()
     assert list(tmp_path.rglob("*.transcript.json"))
+    assert api.get(f"/api/meetings/{meeting_id}").json()["latestJob"] == {
+        "id": job["id"], "state": "failed", "stage": "transcribe", "errorCode": "PROCESSING_FAILED",
+    }
     monkeypatch.setattr(store, "save_segments", original_save)
-    assert store.retry_job(job["id"], org_id)["state"] == "queued"
+    retry = api.post(f"/api/jobs/{job['id']}/retry")
+    assert retry.status_code == 202 and retry.json()["state"] == "queued"
     assert run_once(store, "worker-after-restart")
     assert store.get_job(job["id"], org_id)["state"] == "ready"
     assert len(store.get_segments(meeting_id, org_id)) == 1
