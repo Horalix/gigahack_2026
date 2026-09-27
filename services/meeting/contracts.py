@@ -25,12 +25,20 @@ class CreateMeeting(BaseModel):
         return value
 
 
+class ReviseSegment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transcriptRevision: int = Field(ge=1)
+    text: str = Field(min_length=1, max_length=5000)
+
+
 class CreateJob(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     profileId: str | None = None
     asrModelAlias: str | None = None
     llmModelAlias: str | None = None
+    language: Literal["auto", "ro", "ru", "en"] = "auto"
 
 
 class LoginRequest(BaseModel):
@@ -38,6 +46,13 @@ class LoginRequest(BaseModel):
 
     username: str = Field(min_length=1, max_length=128)
     password: str = Field(min_length=1, max_length=256)
+
+
+class SetupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    username: str = Field(min_length=3, max_length=64)
+    password: str = Field(min_length=12, max_length=256)
 
 
 class CreateAccount(BaseModel):

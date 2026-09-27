@@ -12,7 +12,7 @@ from typing import Iterator
 
 
 LEASE_SECONDS = 30
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def default_data_root() -> Path:
@@ -139,6 +139,15 @@ class Storage:
                 )""")
                 db.execute("CREATE INDEX decision_results_meeting ON decision_results(meeting_id,transcript_revision,created_at)")
                 db.execute("PRAGMA user_version=5")
+            if current < 6:
+                db.execute("""CREATE TABLE segment_revisions (
+                    id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, meeting_id TEXT NOT NULL REFERENCES meetings(id),
+                    segment_id TEXT NOT NULL REFERENCES segments(id), editor_id TEXT NOT NULL REFERENCES users(id),
+                    from_revision INTEGER NOT NULL, to_revision INTEGER NOT NULL,
+                    old_text TEXT NOT NULL, new_text TEXT NOT NULL, created_at TEXT NOT NULL
+                )""")
+                db.execute("CREATE INDEX segment_revisions_meeting ON segment_revisions(meeting_id,created_at)")
+                db.execute("PRAGMA user_version=6")
 
     def asset_path(self, meeting_id: str, asset_id: str, suffix: str) -> Path:
         # IDs are generated locally; never put an uploaded name into a filesystem path.
@@ -299,6 +308,17 @@ class Storage:
             row = db.execute("SELECT * FROM meetings WHERE id=? AND organization_id=?", (meeting_id, organization_id)).fetchone()
             return dict(row) if row else None
 
+    def list_meetings(self, user_id: str, organization_id: str, *, query: str = "", limit: int = 20, offset: int = 0) -> tuple[list[dict], int]:
+        pattern = f"%{query.strip()}%"
+        with closing(self.connect()) as db:
+            where = "m.organization_id=? AND g.user_id=? AND m.title LIKE ?"
+            total = db.execute(f"SELECT COUNT(*) FROM meetings m JOIN meeting_grants g ON g.meeting_id=m.id WHERE {where}",
+                               (organization_id, user_id, pattern)).fetchone()[0]
+            rows = db.execute(f"""SELECT m.* FROM meetings m JOIN meeting_grants g ON g.meeting_id=m.id
+                WHERE {where} ORDER BY m.recorded_at DESC,m.id LIMIT ? OFFSET ?""",
+                (organization_id, user_id, pattern, limit, offset)).fetchall()
+            return [dict(row) for row in rows], total
+
     def create_asset(self, meeting_id: str, organization_id: str, details: dict) -> dict:
         row = {"id": details["id"], "organization_id": organization_id, "meeting_id": meeting_id,
                "source_key": details["source_key"], "source_sha256": details["source_sha256"],
@@ -440,6 +460,35 @@ class Storage:
                 item["words"] = json.loads(item.pop("words_json"))
                 result.append(item)
             return result
+
+    def revise_segment(self, meeting_id: str, organization_id: str, segment_id: str,
+                       editor_id: str, transcript_revision: int, text: str) -> dict | None:
+        clean = text.strip()
+        if not clean or len(clean) > 5000:
+            raise ValueError("Transcript text must be 1–5000 characters")
+        with self.transaction() as db:
+            meeting = db.execute("SELECT transcript_revision FROM meetings WHERE id=? AND organization_id=?",
+                                 (meeting_id, organization_id)).fetchone()
+            if not meeting or meeting["transcript_revision"] != transcript_revision:
+                return None
+            segment = db.execute("""SELECT * FROM segments WHERE id=? AND meeting_id=? AND organization_id=?
+                AND transcript_revision=?""", (segment_id, meeting_id, organization_id, transcript_revision)).fetchone()
+            if not segment:
+                return None
+            next_revision = transcript_revision + 1
+            db.execute("""INSERT INTO segment_revisions(id,organization_id,meeting_id,segment_id,editor_id,
+                from_revision,to_revision,old_text,new_text,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (str(uuid.uuid4()), organization_id, meeting_id, segment_id, editor_id, transcript_revision,
+                 next_revision, segment["text"], clean, timestamp()))
+            db.execute("UPDATE segments SET transcript_revision=? WHERE meeting_id=? AND transcript_revision=?",
+                       (next_revision, meeting_id, transcript_revision))
+            db.execute("UPDATE segments SET text=? WHERE id=?", (clean, segment_id))
+            db.execute("UPDATE meetings SET transcript_revision=?,status='transcript_review',updated_at=? WHERE id=?",
+                       (next_revision, timestamp(), meeting_id))
+            row = db.execute("SELECT * FROM segments WHERE id=?", (segment_id,)).fetchone()
+            item = dict(row)
+            item["words"] = json.loads(item.pop("words_json"))
+            return item
 
     def save_decisions(self, job: dict, worker_id: str, result: dict) -> None:
         with self.transaction() as db:

@@ -14,7 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import AuthService, SESSION_COOKIE, SESSION_SECONDS
-from .contracts import CreateAccount, CreateJob, CreateMeeting, ErrorEnvelope, GrantMeetingAccess, LoginRequest, SetAccountActive
+from .contracts import CreateAccount, CreateJob, CreateMeeting, ErrorEnvelope, GrantMeetingAccess, LoginRequest, ReviseSegment, SetAccountActive, SetupRequest
 from .media import MAX_UPLOAD_BYTES, MediaError, decode
 from .storage import Storage
 
@@ -151,6 +151,23 @@ def create_app(data_root: Path | None = None) -> FastAPI:
                             httponly=True, secure=request.url.scheme == "https", samesite="strict")
         return {"user": user}
 
+    @app.post("/api/auth/setup", status_code=201)
+    def initial_setup(data: SetupRequest, request: Request, response: Response, db: Storage = Depends(store)):
+        if db.user_count():
+            raise ServiceError(409, "SETUP_COMPLETE", "An administrator account already exists")
+        try:
+            request.app.state.auth.create_user(db.installation_organization(), data.username,
+                                               data.password, "administrator", bootstrap=True)
+        except ValueError as exc:
+            raise ServiceError(422, "SETUP_INVALID", str(exc)) from exc
+        host = request.client.host if request.client else "127.0.0.1"
+        token, user = request.app.state.auth.authenticate_password(data.username, data.password, host)
+        if not token:
+            raise ServiceError(500, "SETUP_LOGIN_FAILED", "The administrator account was created; sign in to continue")
+        response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_SECONDS, path="/",
+                            httponly=True, secure=request.url.scheme == "https", samesite="strict")
+        return {"user": user}
+
     @app.get("/api/auth/me")
     def current_user(actor: dict = Depends(principal)):
         return {"user": AuthService.public_user(actor)}
@@ -196,6 +213,14 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         item["recordedAt"] = data.recordedAt.isoformat()
         return meeting_record(db.create_meeting(actor, item))
 
+    @app.get("/api/meetings")
+    def list_meetings(q: str = "", limit: int = Query(default=20, ge=1, le=100),
+                      offset: int = Query(default=0, ge=0), actor: dict = Depends(principal),
+                      db: Storage = Depends(store)):
+        rows, total = db.list_meetings(actor["id"], actor["organization_id"], query=q, limit=limit, offset=offset)
+        return {"meetings": [meeting_record(row) for row in rows], "total": total,
+                "limit": limit, "offset": offset}
+
     @app.get("/api/meetings/{meeting_id}")
     def get_meeting(meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
         meeting = meeting_or_404(meeting_id, actor, db)
@@ -203,6 +228,19 @@ def create_app(data_root: Path | None = None) -> FastAPI:
                 "asset": asset_record(db.latest_asset(meeting_id, actor["organization_id"])),
                 "segments": [segment_record(row) for row in db.get_segments(meeting_id, actor["organization_id"])],
                 "decisions": db.get_meeting_decisions(meeting_id, actor["organization_id"])}
+
+    @app.put("/api/meetings/{meeting_id}/segments/{segment_id}")
+    def revise_segment(meeting_id: str, segment_id: str, data: ReviseSegment,
+                       actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting_or_404(meeting_id, actor, db, write=True)
+        try:
+            segment = db.revise_segment(meeting_id, actor["organization_id"], segment_id,
+                                        actor["id"], data.transcriptRevision, data.text)
+        except ValueError as exc:
+            raise ServiceError(422, "TRANSCRIPT_TEXT_INVALID", str(exc)) from exc
+        if not segment:
+            raise ServiceError(409, "TRANSCRIPT_REVISION_CONFLICT", "Transcript changed; reload before editing")
+        return segment_record(segment)
 
     @app.get("/api/meetings/{meeting_id}/grants")
     def get_meeting_grants(meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
@@ -299,7 +337,8 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         from .models import ModelAssetError, validate_assets, resolve_profile
         try:
             config = resolve_profile(data.profileId, asr_alias=data.asrModelAlias,
-                                     llm_alias=data.llmModelAlias)
+                                     llm_alias=data.llmModelAlias,
+                                     overrides={"asr": {"language": data.language}})
         except (ValueError, KeyError, FileNotFoundError) as exc:
             raise ServiceError(422, "PROFILE_UNAVAILABLE", str(exc)) from exc
         try:

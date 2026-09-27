@@ -40,6 +40,23 @@ def test_auth_required_and_demo_header_is_not_a_bypass(tmp_path, monkeypatch):
     assert api.post("/api/meetings", json={}).status_code == 401
 
 
+def test_first_run_setup_and_searchable_meeting_list(tmp_path):
+    api = TestClient(create_app(tmp_path), headers={"Origin": ORIGIN})
+    assert api.get("/api/health").json()["setupRequired"] is True
+    setup = api.post("/api/auth/setup", json={"username": "first-admin", "password": PASSWORD})
+    assert setup.status_code == 201, setup.text
+    assert api.get("/api/auth/me").json()["user"]["role"] == "administrator"
+    for title in ("Romanian clinic", "Russian clinic"):
+        assert api.post("/api/meetings", json={
+            "title": title, "recordedAt": "2026-09-26T09:00:00Z", "timeZone": "Europe/Warsaw",
+            "outputLanguage": "ro", "patientLinkIds": [],
+        }).status_code == 201
+    result = api.get("/api/meetings?q=Romanian&limit=1&offset=0").json()
+    assert result["total"] == 1
+    assert [meeting["title"] for meeting in result["meetings"]] == ["Romanian clinic"]
+    assert api.post("/api/auth/setup", json={"username": "other-admin", "password": PASSWORD}).status_code == 409
+
+
 def test_login_cookie_logout_and_expiry(tmp_path):
     app, _ = setup_app(tmp_path)
     api, response = logged_in(app)

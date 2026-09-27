@@ -7,7 +7,7 @@
   import "@fontsource/noto-sans/cyrillic.css";
   import "$lib/notavra/notavra.css";
   import "$lib/notavra/experience.css";
-  import App from "$lib/notavra/App.svelte";
+  import LocalWorkbench from "$lib/notavra/LocalWorkbench.svelte";
 </script>
 
-<App />
+<LocalWorkbench />

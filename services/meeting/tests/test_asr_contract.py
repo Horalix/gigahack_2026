@@ -53,3 +53,27 @@ def test_missing_local_model_fails_without_download(tmp_path):
     with pytest.raises(ASRError, match="missing") as error:
         transcribe_audio(tmp_path / "audio.wav", {"duration_ms": 1000}, config)
     assert error.value.code == "MODEL_NOT_READY"
+
+
+def test_romanian_selection_disables_language_detection(tmp_path, monkeypatch):
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "model.bin").write_bytes(b"fixture")
+    decoded = tmp_path / "audio.wav"
+    decoded.write_bytes(b"fixture")
+
+    class FakeWhisper:
+        def __init__(self, *args, **kwargs): pass
+        def transcribe(self, path, **kwargs):
+            assert kwargs["language"] == "ro"
+            assert kwargs["multilingual"] is False
+            segment = types.SimpleNamespace(start=0, end=1, text="Bună ziua", words=[])
+            return iter([segment]), types.SimpleNamespace(language="ro")
+
+    monkeypatch.setitem(sys.modules, "ctranslate2", types.SimpleNamespace(get_supported_compute_types=lambda device: {"int8"}))
+    monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=FakeWhisper,
+        BatchedInferencePipeline=lambda model: model))
+    config = {"models": {"asr": {"path": str(model_dir), "backend": "faster_whisper", "device": "cpu",
+        "compute_type": "int8", "batch_size": 1, "beam_size": 5, "word_timestamps": True, "language": "ro"}}}
+    result = transcribe_audio(decoded, {"id": "asset-ro", "duration_ms": 1000}, config)
+    assert result["segments"][0]["language"] == "ro"

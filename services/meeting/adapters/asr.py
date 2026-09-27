@@ -70,13 +70,16 @@ def transcribe_audio(decoded: Path, asset: dict, config: dict, progress: Callabl
     if monitor:
         monitor.start()
     model = None
+    engine = iterator = info = None
     try:
         model = WhisperModel(str(model_path), device=device,
                              compute_type=selected.get("compute_type", "int8_float16"),
                              cpu_threads=int(selected.get("cpu_threads", 0)), local_files_only=True)
         engine = BatchedInferencePipeline(model) if batch_size > 1 else model
+        selected_language = selected.get("language", "auto")
         options = {
-            "task": "transcribe", "language": None, "multilingual": True,
+            "task": "transcribe", "language": None if selected_language == "auto" else selected_language,
+            "multilingual": selected_language == "auto",
             "beam_size": int(selected.get("beam_size", 5)),
             "word_timestamps": bool(selected.get("word_timestamps", True)),
             "vad_filter": True,
@@ -103,7 +106,8 @@ def transcribe_audio(decoded: Path, asset: dict, config: dict, progress: Callabl
                                   "probability": word.probability})
             raw.append({"id": f"{asset['id']}-seg-{index:06d}", "transcriptRevision": 1,
                         "startMs": start, "endMs": end, "text": segment.text,
-                        "language": "und", "origin": "asr", "speakerClusterId": None,
+                        "language": selected_language if selected_language != "auto" else (info.language if info else "und"),
+                        "origin": "asr", "speakerClusterId": None,
                         "words": words})
             if progress:
                 progress(end)
@@ -128,5 +132,5 @@ def transcribe_audio(decoded: Path, asset: dict, config: dict, progress: Callabl
         stop.set()
         if monitor:
             monitor.join(timeout=3)
-        del model
+        del iterator, engine, info, model
         gc.collect()

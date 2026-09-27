@@ -103,6 +103,7 @@ def resolve_profile(
                 "compute_type": "MOM_ASR_COMPUTE_TYPE",
                 "batch_size": "MOM_ASR_BATCH_SIZE",
                 "beam_size": "MOM_ASR_BEAM_SIZE",
+                "language": "MOM_ASR_LANGUAGE",
             },
             "llm": {
                 "context_size": "MOM_LLM_CONTEXT_SIZE",
@@ -114,7 +115,7 @@ def resolve_profile(
             if variable in os.environ:
                 raw = os.environ[variable]
                 try:
-                    kind_overrides.setdefault(setting, int(raw) if setting != "compute_type" else raw)
+                    kind_overrides.setdefault(setting, int(raw) if setting in {"batch_size", "beam_size", "context_size", "max_output_tokens"} else raw)
                 except ValueError as exc:
                     raise ModelConfigurationError(f"Invalid integer in {variable}.") from exc
         for setting, value in kind_overrides.items():
@@ -129,6 +130,8 @@ def resolve_profile(
         if backend_env and backend_env != model.get("backend"):
             raise ModelConfigurationError(f"Configured {kind.upper()} backend is not registered for {alias}.")
         if kind == "asr":
+            if result.get("language", "auto") not in {"auto", "ro", "ru", "en"}:
+                raise ModelConfigurationError("ASR language must be auto, ro, ru, or en.")
             if result["batch_size"] < 1 or result["batch_size"] > limits["max_asr_batch_size"]:
                 raise ModelConfigurationError("ASR batch_size exceeds profile limits.")
             if result["beam_size"] < 1 or result["beam_size"] > limits["max_asr_beam_size"]:

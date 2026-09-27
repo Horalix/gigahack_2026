@@ -281,3 +281,41 @@ def test_worker_reuses_durable_transcript_after_commit_failure(tmp_path, monkeyp
     meeting_response = api.get(f"/api/meetings/{meeting_id}")
     assert meeting_response.status_code == 200
     assert meeting_response.json()["decisions"]["modelAlias"] == "test-llm"
+
+
+def test_transcript_correction_is_audited_and_invalidates_old_decisions(tmp_path, monkeypatch):
+    from services.meeting.adapters import asr
+    from services.meeting import decisions
+    from services.meeting.jobs import run_once
+
+    api = client(tmp_path, monkeypatch)
+    meeting_id = meeting(api)
+    upload = api.post(f"/api/meetings/{meeting_id}/audio", files={"file": ("synthetic.wav", short_wav(), "audio/wav")})
+    asset = upload.json()
+    store = api.app.state.store
+    org_id = store.installation_organization()
+    job = store.create_or_get_job(meeting_id, org_id, asset["id"], {"profile_id": "test", "models": {"asr": {"path": "synthetic"}}})
+    monkeypatch.setattr(asr, "transcribe_audio", lambda *args, **kwargs: {"segments": [{
+        "id": "segment-editable", "transcriptRevision": 1, "startMs": 0, "endMs": 500,
+        "text": "Original words", "language": "en", "origin": "asr", "words": [],
+    }], "metrics": {}})
+    monkeypatch.setattr(decisions, "extract_decisions", lambda segments, *args, **kwargs: {
+        "transcriptRevision": segments[0]["transcript_revision"], "modelAlias": "test-llm", "items": [], "requiresHumanReview": True,
+    })
+    assert run_once(store, "worker-edit-test")
+    updated = api.put(f"/api/meetings/{meeting_id}/segments/segment-editable", json={
+        "transcriptRevision": 1, "text": "Corrected words",
+    })
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["text"] == "Corrected words"
+    result = api.get(f"/api/meetings/{meeting_id}").json()
+    assert result["meeting"]["transcriptRevision"] == 2
+    assert result["segments"][0]["transcriptRevision"] == 2
+    assert result["decisions"] is None
+    with store.connect() as db:
+        history = db.execute("SELECT old_text,new_text,from_revision,to_revision FROM segment_revisions").fetchone()
+    assert tuple(history) == ("Original words", "Corrected words", 1, 2)
+    stale = api.put(f"/api/meetings/{meeting_id}/segments/segment-editable", json={
+        "transcriptRevision": 1, "text": "Stale edit",
+    })
+    assert stale.status_code == 409
