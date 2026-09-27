@@ -53,6 +53,9 @@ async function installApi(page, { setupRequired = true, failedJob = false } = {}
       meeting = { id: "meeting-1", title: body.title, recordedAt: body.recordedAt, status: "created", outputLanguage: body.outputLanguage, transcriptRevision: 0 };
       return json(meeting, 201);
     }
+    if (path === "/meetings/meeting-1/captures" && method === "POST") return json({ id: "capture-1", state: "capturing", nextSequence: 0 }, 201);
+    if (path === "/captures/capture-1/chunks/0" && method === "PUT") return json({ nextSequence: 1, receivedBytes: 5 }, 201);
+    if (path === "/captures/capture-1/seal" && method === "POST") { uploaded = true; return json({ id: "asset-1", durationMs: 1000 }, 201); }
     if (path === "/patients" && method === "GET") {
       const q = (url.searchParams.get("q") || "").toLowerCase();
       const matches = patients.filter((item) => !q || item.displayName.toLowerCase().includes(q) || (item.hospitalReference || "").toLowerCase().includes(q));
@@ -154,6 +157,53 @@ test("doctor can retry a failed local extraction from the meeting", async ({ pag
   const retry = page.getByRole("button", { name: "Retry failed step" });
   await expect(retry).toBeVisible();
   await retry.click();
+  await expect(page.getByText("Transcript and decisions are ready for review.")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Pacientul va reveni luni.").first()).toBeVisible();
+});
+
+test("microphone capture shows input level and confirmed local chunks", async ({ page }) => {
+  await installApi(page);
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) } });
+    class FakeAudioContext {
+      state = "running";
+      destination = {};
+      createAnalyser() { return { fftSize: 256, connect() {}, disconnect() {}, getByteTimeDomainData(/** @type {Uint8Array} */ samples) { samples.fill(128); samples[0] = 220; } }; }
+      createMediaStreamSource() { return { connect() {} }; }
+      createGain() { return { gain: { value: 1 }, connect() {} }; }
+      resume() { return Promise.resolve(); }
+      close() { this.state = "closed"; return Promise.resolve(); }
+    }
+    class FakeMediaRecorder {
+      /** @param {string} type */
+      static isTypeSupported(type) { return type === "audio/webm;codecs=opus"; }
+      state = "inactive";
+      mimeType = "audio/webm;codecs=opus";
+      /** @type {((event: { data: Blob }) => void) | null} */
+      ondataavailable = null;
+      /** @type {(() => void) | null} */
+      onstop = null;
+      emitted = false;
+      timer = 0;
+      start() { this.state = "recording"; this.timer = window.setTimeout(() => this.emitChunk(), 50); }
+      emitChunk() { if (this.emitted) return; this.emitted = true; this.ondataavailable?.({ data: new Blob(["chunk"], { type: this.mimeType }) }); }
+      stop() { window.clearTimeout(this.timer); this.emitChunk(); this.state = "inactive"; this.onstop?.(); }
+    }
+    Object.defineProperty(window, "AudioContext", { configurable: true, value: FakeAudioContext });
+    Object.defineProperty(window, "MediaRecorder", { configurable: true, value: FakeMediaRecorder });
+  });
+  await page.goto("/");
+  await page.getByLabel("Username").fill("doctor");
+  await page.getByLabel("Password").fill("correct horse battery staple");
+  await page.getByRole("button", { name: "Create administrator" }).click();
+  await page.getByLabel("Meeting title").fill("Microphone check");
+  await page.getByRole("button", { name: "Create meeting" }).click();
+  await page.getByRole("button", { name: "Record live" }).click();
+  const meter = page.getByLabel("Microphone level");
+  await expect(meter).toBeVisible();
+  await expect.poll(() => meter.evaluate((element) => Number(/** @type {HTMLMeterElement} */ (element).value))).toBeGreaterThan(0);
+  await expect(page.getByText("1 chunk saved · 0 pending")).toBeVisible();
+  await page.getByRole("button", { name: "Stop recording" }).click();
   await expect(page.getByText("Transcript and decisions are ready for review.")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText("Pacientul va reveni luni.").first()).toBeVisible();
 });

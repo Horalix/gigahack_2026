@@ -34,14 +34,19 @@
   let status = $state("");
   let recording = $state(false);
   let recordingSeconds = $state(0);
+  let microphoneLevel = $state(0);
+  let acknowledgedCaptureChunks = $state(0);
   let captureId: string | undefined;
   let nextCaptureSequence = 0;
   let chunkUpload: Promise<void> = Promise.resolve();
-  let pendingChunkUploads = 0;
+  let pendingChunkUploads = $state(0);
   let captureFailure = "";
   let captureWarning = "";
   let recorder: MediaRecorder | undefined;
   let mediaStream: MediaStream | undefined;
+  let audioContext: AudioContext | undefined;
+  let audioAnalyser: AnalyserNode | undefined;
+  let audioMeterTimer: ReturnType<typeof setInterval> | undefined;
   let recordingTimer: ReturnType<typeof setInterval> | undefined;
   let editingSegment = $state<string | null>(null);
   let editText = $state("");
@@ -335,11 +340,48 @@
     } catch (e) { error = e instanceof Error ? e.message : "The failed step could not be retried"; status = ""; busy = false; }
   }
 
+  function startMicrophoneMeter(stream: MediaStream) {
+    try {
+      audioContext = new AudioContext();
+      audioAnalyser = audioContext.createAnalyser();
+      audioAnalyser.fftSize = 256;
+      const source = audioContext.createMediaStreamSource(stream);
+      const silentOutput = audioContext.createGain();
+      silentOutput.gain.value = 0;
+      source.connect(audioAnalyser);
+      audioAnalyser.connect(silentOutput);
+      silentOutput.connect(audioContext.destination);
+      void audioContext.resume().catch(() => stopMicrophoneMeter());
+      const samples = new Uint8Array(audioAnalyser.fftSize);
+      audioMeterTimer = setInterval(() => {
+        if (!audioAnalyser) return;
+        audioAnalyser.getByteTimeDomainData(samples);
+        let energy = 0;
+        for (const sample of samples) energy += ((sample - 128) / 128) ** 2;
+        microphoneLevel = Math.min(1, Math.sqrt(energy / samples.length) * 4);
+      }, 100);
+    } catch {
+      stopMicrophoneMeter();
+    }
+  }
+
+  function stopMicrophoneMeter() {
+    if (audioMeterTimer) clearInterval(audioMeterTimer);
+    audioMeterTimer = undefined;
+    audioAnalyser?.disconnect();
+    audioAnalyser = undefined;
+    const context = audioContext;
+    audioContext = undefined;
+    if (context && context.state !== "closed") void context.close().catch(() => undefined);
+    microphoneLevel = 0;
+  }
+
   async function startRecording() {
     if (!detail) return;
-    error = ""; captureFailure = ""; captureWarning = ""; nextCaptureSequence = 0; pendingChunkUploads = 0; chunkUpload = Promise.resolve(); recordingSeconds = 0;
+    error = ""; captureFailure = ""; captureWarning = ""; nextCaptureSequence = 0; pendingChunkUploads = 0; acknowledgedCaptureChunks = 0; chunkUpload = Promise.resolve(); recordingSeconds = 0;
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      startMicrophoneMeter(mediaStream);
       const requestedMime = ["audio/webm;codecs=opus", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
       recorder = requestedMime ? new MediaRecorder(mediaStream, { mimeType: requestedMime }) : new MediaRecorder(mediaStream);
       const mimeType = recorder.mimeType || requestedMime || "audio/webm";
@@ -363,10 +405,12 @@
           });
           const body = await response.json().catch(() => ({}));
           if (!response.ok) throw new Error(body.message || "A recording chunk could not be saved");
+          acknowledgedCaptureChunks += 1;
         }).catch((e) => { captureFailure = e instanceof Error ? e.message : "Chunk upload failed"; error = captureFailure; })
           .finally(() => pendingChunkUploads = Math.max(0, pendingChunkUploads - 1));
       };
       recorder.onstop = () => {
+        stopMicrophoneMeter();
         mediaStream?.getTracks().forEach((track) => track.stop());
         mediaStream = undefined;
         void finishRecording();
@@ -374,7 +418,7 @@
       recorder.start(10_000);
       recording = true;
       recordingTimer = setInterval(() => recordingSeconds += 1, 1000);
-    } catch (e) { error = e instanceof Error ? e.message : "Microphone access failed"; mediaStream?.getTracks().forEach((track) => track.stop()); mediaStream = undefined; }
+    } catch (e) { stopMicrophoneMeter(); error = e instanceof Error ? e.message : "Microphone access failed"; mediaStream?.getTracks().forEach((track) => track.stop()); mediaStream = undefined; }
   }
 
   async function finishRecording() {
@@ -426,6 +470,7 @@
     recordingTimer = undefined;
     recording = false;
     if (recorder?.state === "recording") recorder.stop();
+    else stopMicrophoneMeter();
   }
 
   function watchJob(jobId: string) {
@@ -493,7 +538,7 @@
           <div class="panel-head"><div><p class="eyebrow">{new Date(detail.meeting.recordedAt).toLocaleString()}</p><h1>{detail.meeting.title}</h1></div><div class="downloads"><button class="quiet" onclick={() => (detail = null)}>← Meetings</button>{#if detail.permission === "owner"}<button class="quiet" onclick={deleteMeeting}>Delete local meeting data</button>{/if}</div></div>
           {#if detail.asset}<p class="muted">Audio length: {(detail.asset.durationMs / 60000).toFixed(1)} min {#if detail.asset.decodeWarning}<span class="warning">· Audio decode warning</span>{/if}</p>{/if}
           {#each detail.captures as capture (capture.id)}<section class="panel"><h2>Unfinished microphone capture</h2><p>Only acknowledged chunks were saved ({(capture.received_bytes / 1048576).toFixed(1)} MB). The last part of speech may be missing. Process the saved portion or discard it.</p><div class="downloads"><button class="primary" disabled={busy || !capture.next_sequence} onclick={() => processSavedCapture(capture)}>Process saved portion</button><button class="quiet" disabled={busy} onclick={() => discardSavedCapture(capture)}>Discard saved chunks</button></div></section>{/each}
-          <section class="panel"><h2>Add recording</h2><p>Upload audio or video, or record through the microphone. Live audio is saved to disk in short parts and processed after you stop. Processing stays local.</p><div class="live-record"><button class:recording class="quiet" type="button" onclick={() => recording ? stopRecording() : startRecording()} disabled={busy}>{recording ? "Stop recording" : "● Record live"}</button>{#if recording}<span class="record-indicator"><i></i> Recording · {formatElapsed(recordingSeconds)} · saving locally</span>{/if}</div><form class="upload-form" onsubmit={upload}>
+          <section class="panel"><h2>Add recording</h2><p>Upload audio or video, or record through the microphone. Live audio is saved to disk in short parts and processed after you stop. Processing stays local.</p><div class="live-record"><button class:recording class="quiet" type="button" onclick={() => recording ? stopRecording() : startRecording()} disabled={busy}>{recording ? "Stop recording" : "● Record live"}</button>{#if recording}<span class="record-indicator"><i></i> Recording · {formatElapsed(recordingSeconds)}<label class="record-health">Microphone level <meter min="0" max="1" value={microphoneLevel}></meter></label><small>{acknowledgedCaptureChunks} {acknowledgedCaptureChunks === 1 ? "chunk" : "chunks"} saved · {pendingChunkUploads} pending</small></span>{/if}</div><form class="upload-form" onsubmit={upload}>
             <label class="file-input">Recording file<input name="audio" type="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.mp4,.mov,.webm" required /></label>
             <label>Hardware profile<select bind:value={profileId}>{#each profiles as p (p.id)}<option value={p.id} disabled={!p.compatible}>{p.id === "laptop8" ? "Laptop · RTX 3070 Ti · 8 GB" : p.id === "hospital16" ? "Workstation · RTX 5080 · 16 GB" : p.id} {!p.compatible ? "· unavailable on this computer" : p.asrFilesPresent && p.llmFilePresent ? "· ready" : "· models missing"}</option>{/each}</select></label>
             <label>ASR language<select bind:value={language}><option value="ro">Romanian</option><option value="ru">Russian</option><option value="en">English</option><option value="auto">Auto-detect</option></select></label>
@@ -524,6 +569,6 @@
   .workspace{max-width:1440px;margin:auto;padding:22px 32px;min-height:100vh;box-sizing:border-box;display:grid;grid-template-rows:auto 1fr auto;gap:20px}.workspace header{display:flex;align-items:center;gap:16px;border-bottom:1px solid #dfe5e9;padding-bottom:16px}.workspace header>div{display:flex;align-items:center;gap:10px;margin-right:auto}.workspace header img{width:34px;height:36px}.workspace header span{display:grid}.workspace header small{font-size:10px;letter-spacing:.1em;color:#71808b}.quiet{background:white;border:1px solid #d9e0e5;border-radius:8px;padding:8px 12px;color:#37505d}.columns{display:grid;grid-template-columns:330px minmax(0,1fr);gap:22px;min-height:0}.columns aside,.content{min-width:0}.columns aside{border-right:1px solid #dfe5e9;padding-right:20px}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.panel-head h1,.panel-head h2{margin:0}.meeting-list{list-style:none;padding:0;margin:12px 0}.meeting-list button{width:100%;display:grid;text-align:left;border:0;border-radius:8px;background:transparent;padding:12px;color:inherit;gap:4px}.meeting-list button:hover,.meeting-list button.chosen{background:#e7f2f0}.meeting-list small,.muted,.eyebrow{color:#71808b}.pager{display:flex;justify-content:space-between;align-items:center;color:#6c7a85;font-size:13px}.pager button{border:1px solid #d9e0e5;border-radius:6px;background:white;padding:5px 10px}.pager button:disabled{opacity:.4}.new-meeting{display:grid;gap:12px;border-top:1px solid #dfe5e9;margin-top:18px;padding-top:18px}.new-meeting h3{margin:0}.content{display:grid;align-content:start;gap:16px}.eyebrow{margin:0 0 3px;font-size:13px}.panel{background:white;border:1px solid #e1e6ea;border-radius:12px;padding:18px 20px}.panel h2{font-size:18px;margin:0 0 8px}.panel h2 span{font-size:12px;font-weight:400;color:#71808b;margin-left:8px}.panel>p{margin:0 0 14px;color:#687985}.upload-form{display:grid;grid-template-columns:minmax(180px,1fr) 220px 155px auto;align-items:end;gap:12px}.upload-form input[type=file]{padding:8px}.upload-form label{font-size:13px}.status{color:#17675f;margin:14px 0 0}.transcript{max-height:55vh;overflow:auto}.transcript p{display:grid;grid-template-columns:25px 76px 1fr 35px;gap:12px;border-bottom:1px solid #eef1f3;padding:10px 0;margin:0}.transcript time,.transcript small{color:#82909a;font-size:12px}.warning{color:#9a6512}.empty{align-self:center;justify-self:center;max-width:560px;text-align:center;padding:56px 20px}.empty>span{display:inline-grid;place-items:center;background:#dcefea;color:#14655c;border-radius:50%;width:42px;height:42px;font-weight:800}.empty p{color:#6e7d87}.workspace footer{text-align:center;color:#81909a;font-size:12px;border-top:1px solid #dfe5e9;padding-top:12px}
   .transcript p{grid-template-columns:25px 76px 1fr 52px 35px}.edit-button{border:0;background:transparent;color:#17675f;font-size:12px}.edit-cell{display:grid;grid-template-columns:1fr auto auto;gap:8px}.edit-cell textarea{width:100%;box-sizing:border-box;border:1px solid #d7e0e7;border-radius:6px;padding:8px;font:inherit}.downloads{display:flex;gap:7px}.action-card{border-top:1px solid #eef1f3;padding:14px 0}.action-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.action-title b{font-size:15px}.action-kind,.action-state{border-radius:999px;background:#e8f2f0;color:#17675f;padding:3px 9px;font-size:11px;text-transform:capitalize}.action-state{background:#f1f2ed;color:#71632e}.action-meta{display:flex;gap:16px;color:#687985;font-size:13px;margin:8px 0}.action-card blockquote{margin:8px 0 0 12px;border-left:2px solid #83b7ad;padding:4px 10px;color:#42565f;font-size:13px}.action-card blockquote time{color:#81909a;margin-right:8px;font-size:11px}.review-note{display:block;border-top:1px solid #eef1f3;padding-top:10px;color:#71808b}
   .transcript p.with-find{grid-template-columns:25px 76px 24px 1fr 52px 35px}.select-match{align-self:center}.find-toolbar,.bulk-correction{display:flex;align-items:end;gap:10px;margin:10px 0 14px;flex-wrap:wrap}.find-toolbar label,.bulk-correction label{display:grid;gap:5px;font-size:12px;color:#71808b;min-width:200px}.find-toolbar input,.bulk-correction input{border:1px solid #d7e0e7;border-radius:6px;padding:8px;font:inherit}.find-toolbar span{color:#61727c;font-size:12px;margin:0 auto 8px 0}.bulk-correction{background:#f6f9f8;padding:10px;border-radius:8px}.audio-review{width:100%;margin:8px 0 14px}.play-passage{align-self:start;width:25px;height:25px;padding:0;border:1px solid #d9e0e5;border-radius:6px;background:white;color:#17675f;cursor:pointer}.play-passage:hover{background:#e7f2f0}.transcript mark{background:#fff0af;color:inherit}.transcript mark.current{background:#ffce57;outline:2px solid #e6a400;border-radius:2px}
-  .approval{display:flex;align-items:center;gap:9px;margin-bottom:14px;font-size:14px}.approval input{width:auto}.live-record{display:flex;align-items:center;gap:12px;margin:0 0 16px}.quiet.recording{border-color:#cd5b58;color:#a73535}.record-indicator{display:flex;align-items:center;gap:8px;color:#aa3d3d;font-size:13px;font-variant-numeric:tabular-nums}.record-indicator i{width:9px;height:9px;border-radius:50%;background:#cd4b48;animation:pulse 1.2s infinite}@keyframes pulse{50%{opacity:.3}}
+  .approval{display:flex;align-items:center;gap:9px;margin-bottom:14px;font-size:14px}.approval input{width:auto}.live-record{display:flex;align-items:center;gap:12px;margin:0 0 16px}.quiet.recording{border-color:#cd5b58;color:#a73535}.record-indicator{display:flex;align-items:center;gap:8px;color:#aa3d3d;font-size:13px;font-variant-numeric:tabular-nums}.record-indicator i{width:9px;height:9px;border-radius:50%;background:#cd4b48;animation:pulse 1.2s infinite}.record-health{display:flex;align-items:center;gap:8px;color:#71808b}.record-health meter{width:100px;height:12px}.record-indicator small{color:#71808b;font-size:11px;font-weight:400}@keyframes pulse{50%{opacity:.3}}
   @media(max-width:900px){.columns{grid-template-columns:1fr}.columns aside{border:0;padding:0}.upload-form{grid-template-columns:1fr 1fr}.workspace{padding:18px}.transcript p{grid-template-columns:25px 62px 1fr 52px 35px}.transcript p.with-find{grid-template-columns:25px 62px 24px 1fr 52px 35px}}
 </style>

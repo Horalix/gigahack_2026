@@ -11,7 +11,7 @@
 - [x] Approval creates a revisioned, checksummed HTML artifact.
 - [x] Laptop ASR batch 2 passed two identical runs on the same 702.549s Romanian WAV; WER 51.64%, CER 35.28% against the saved machine reference.
 - [x] `python -m pytest services/meeting/tests -q`: 52 passed.
-- [x] `npm run test:ui`: 3 passed against mocked browser audio/API for the UI journeys.
+- [x] `npm run test:ui`: 4 passed, including a mocked microphone level, chunk acknowledgment, Stop and final processing flow.
 - [x] `npm run check`: 0 errors/warnings; `npm run build`: passed.
 - [x] `scripts/hackathon/preflight.ps1 -ProfileId laptop8`: passed on this RTX 3070 Ti laptop.
 
@@ -20,7 +20,7 @@
 - [ ] Full one-hour upload-to-approved-file timing at or below 15 minutes. Current linear stage-sum estimate is 12.2 minutes/hour, not an hour test.
 - [ ] RTX 5080 / 16 GB host test. `hospital16` batch 4 and CUDA 13 are configured but not physically verified here.
 - [ ] WAN-disconnected launch and external-egress observation on the final demo build.
-- [ ] Physical microphone test and provisional transcript during recording. Current capture saves chunks and starts ASR after Stop.
+- [ ] Physical microphone test and provisional transcript during recording. Current capture shows a level meter and saves chunks, then starts ASR after Stop.
 - [ ] Human review of Romanian transcription, medical terms, negation, names, numbers and extracted actions. The Microsoft share page was inaccessible; the saved reference is machine-generated.
 - [ ] Integrated real-audio browser/Tauri manual review of search, passage playback, edit, reprocess, approval and artifact download after the latest branch commits.
 - [ ] Packaged release build and fresh-machine install. Tauri dev launch and service health were previously verified; that does not prove packaging.

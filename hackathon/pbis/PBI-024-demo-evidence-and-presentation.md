@@ -42,7 +42,7 @@ Writing Affan's email implementation plan, promising win/clinical validation, cl
 ## Completion record
 
 - Draft artifacts on `codex/notavra-finalization`: `hackathon/DEMO.md`, `hackathon/PITCH.md` and `hackathon/RELEASE_CHECKLIST.md`; current model/hardware evidence is linked from the handoff.
-- Commands and observed behavior: docs-only changes; verify with `git diff --check`. App verification currently recorded: 52 service tests, 3 mocked UI tests, Svelte check/build and laptop preflight pass.
+- Commands and observed behavior: docs-only changes; verify with `git diff --check`. App verification currently recorded: 52 service tests, 4 mocked UI tests (including mic-level/chunk status), Svelte check/build and laptop preflight pass.
 - Acceptance evidence / limitations: the runbook and pitch separate verified behavior from projections. CEO rehearsal, final disconnected startup, full-hour timing, 5080 test, physical microphone and human review are not done; keep PBI OPEN.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
 

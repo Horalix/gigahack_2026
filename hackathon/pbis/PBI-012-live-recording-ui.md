@@ -43,6 +43,8 @@ Background recording after browser closes, speaker enrollment, native overlay fu
 
 - Commit / changed files: `00a5730`, `0fb96f0`; main-app microphone recording now uploads acknowledged browser chunks to the local service and resumes/declares saved partial captures after interruption.
 - Commands and observed behavior: capture API tests cover durable sequence writes, duplicate retries, gap rejection, restart recovery, WAV sealing and access isolation; Svelte check/build pass.
-- Acceptance evidence / limitations: audio recording remains capture-then-transcribe after Stop; no provisional/live transcript or audio-level meter is displayed, and a physical microphone run has not been performed. Keep PBI OPEN; the current implementation only establishes safe local capture and final processing.
+- Acceptance evidence / limitations: the original implementation established safe local capture and final processing. The follow-up below adds meter and confirmed-chunk status, but capture still transcribes only after Stop and a physical microphone run has not been performed.
+- Follow-up on `codex/notavra-finalization`: recording UI now displays a microphone level meter and counts acknowledged versus pending durable chunks. A mocked microphone/browser flow verifies level updates, chunk acknowledgment, Stop and final transcript processing. `npm run check`, `npm run test:ui` (4 passed) and `npm run build` pass.
+- PBI remains OPEN: the browser mic is mocked; real-device recording is not verified, and transcript words still appear only after Stop and ASR processing. No provisional/live words are shown yet.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
 

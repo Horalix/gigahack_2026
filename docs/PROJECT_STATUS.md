@@ -1,5 +1,7 @@
 # Project status
 
+> GigaHack/Notavra branch status is maintained in [`hackathon/10-team-handoff.md`](../hackathon/10-team-handoff.md) and its PBI index. This file also retains the older FeelSay native-app release record.
+
 ## Done
 
 - Replaced mock production capture and external-command recognition with real Windows adapters and embedded CPU Whisper.
@@ -22,7 +24,8 @@
 - Hackathon PBI-003 is complete: pinned large-v3 and Qwen GGUF passed local SHA-256 checks; large-v3 ran on the 8 GB laptop GPU and Qwen loaded with its embedded template on a local CPU runtime. PBI-004 remains open: the permitted 11m42s Medpark recording produced timed words in 101.5 seconds of ASR work, but a composite exposed language/script instability and overlap lost one voice. The remote 16 GB host and one-hour end-to-end path are untested. See `hackathon/10-team-handoff.md` for current team ownership and evidence.
 - PBI-004 now has a provisional comparison against the user-shared Microsoft AI transcript: WER is 81.8% (1-WER score: 18.2%; 1,788 reference tokens, 1,212 Whisper tokens). This is a machine-to-machine disagreement score, not clinical accuracy: the reference has no human verification. The Whisper run classified the whole recording as Russian although its first 25 seconds are Romanian. Local-only scoring metadata and reference hash are under `%LOCALAPPDATA%\SecureMOM\evaluation`; the transcript/audio remain outside Git.
 - Completed hackathon PBI-001 on the current `noomy/freepalestine` checkout: added versioned Secure MOM record schemas, synthetic contract/output fixtures and documented semantic validation plus Affan's still-pending artifact format/handoff decision. This is additive planning/integration scaffolding; it does not change or complete the caption app.
-- Rebranded the desktop shell and bundled icons to Notavra using the supplied `Gigahack/apps/web/public/brand` assets. The app data identifier remains `app.feelsay.desktop` so this name-only change does not strand existing local settings or transcripts. The new meeting-service upload flow is still not connected to the Svelte UI.
+- Rebranded the desktop shell and bundled icons to Notavra using the supplied `Gigahack/apps/web/public/brand` assets. The app data identifier remains `app.feelsay.desktop` so this name-only change does not strand existing local settings or transcripts. The separate meeting service is now connected to the Notavra workbench; current behavior and open gates are tracked in the hackathon handoff.
+- Current GigaHack branch `codex/notavra-finalization` adds per-passage audio seek/play and microphone level plus acknowledged-chunk status. The mocked microphone journey verifies capture, Stop and post-recording transcription; it does not verify physical mic input or provisional words during recording. Four UI tests, Svelte check and production build pass on this branch.
 - Added `scripts/windows-build.ps1 -Task dev` so Tauri starts with the required libclang, Windows headers, and CMake environment on this machine.
 - Native checks fixed four defects: overbroad source filtering, a borrowed PROPVARIANT destructor causing heap corruption, stale/empty caption rendering crashing the overlay, and missing titlebar-dragging permission.
 - Removed repeated randomized decoding retries for short live chunks. A recognition-state reuse experiment was discarded because its timing benefit was not clear. Native timing remains fixture-specific; broader latency and accuracy evaluation is still needed.
@@ -33,7 +36,7 @@
 ## Next
 
 - Qualify PBI-004 against known-language references and review the code-switch window choice; then continue PBI-009 grounded decisions while Affan builds the PBI-010 artifact renderer.
-- For the requested accuracy comparison, implement a minimal Notavra upload â†’ local ASR â†’ timestamped transcript/export screen against the meeting API. LLM minutes and mail are not needed for this comparison loop.
+- For GigaHack, implement provisional ASR windows during recording, then verify a complete one-hour run and the 5080 profile. See the current P0 items in `hackathon/pbis/README.md`.
 - Complete the remaining controlled checks in `installer-smoke-test.md`: native mouse/menu interaction, mixed-DPI/fullscreen behavior, live microphone, clean-machine installation, and broader speech accuracy/latency.
 
 ## Risks
@@ -41,4 +44,4 @@
 - Only controlled test audio and application data are authorized. Do not capture live microphone/ambient audio or inspect unrelated private applications.
 - Default-output capture was not used because another audio session was active. An idle NVIDIA output endpoint exercised the real WASAPI loopback adapter without changing the default device. Live microphone and clean-machine checks remain explicitly deferred.
 - Windows packages are unsigned. Product completion is not yet proven. The Computer Use native pipe is unavailable after reset/retry; installed WebView tests used a process-local debugging interface, but native mouse interaction remains unverified.
-- The goal is blocked on the remaining native mouse/menu checks. The unavailable helper persisted across the resumed validation continuations and was rechecked after cleanup; a working Windows interaction connection or controlled manual results are needed to close those gates.
+- The legacy FeelSay installer acceptance still needs native mouse/menu checks; that is separate from the Notavra P0 gates recorded in the hackathon handoff.
