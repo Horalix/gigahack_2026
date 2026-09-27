@@ -15,6 +15,7 @@ from fastapi import Cookie, Depends, FastAPI, File, Query, Request, Response, Up
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from .auth import AuthService, SESSION_COOKIE, SESSION_SECONDS
 from .contracts import CreateAccount, CreateCapture, CreateJob, CreateMeeting, CreatePatient, ErrorEnvelope, FinalizeArtifact, GrantMeetingAccess, LoginRequest, ReviseSegment, ReviseSegments, SealCapture, SetAccountActive, SetupRequest, UndoTranscriptRevision, UpdatePatient
@@ -27,8 +28,9 @@ from .storage import Storage, timestamp
 
 DEFAULT_ALLOWED_ORIGINS = {
     "http://localhost:1420", "http://127.0.0.1:1420", "tauri://localhost",
-    "http://tauri.localhost", "https://tauri.localhost",
+    "http://tauri.localhost", "https://tauri.localhost", "http://127.0.0.1:8000",
 }
+FRONTEND_DIR = Path(__file__).resolve().parents[2] / "build"
 
 
 class ServiceError(Exception):
@@ -804,6 +806,11 @@ def create_app(data_root: Path | None = None) -> FastAPI:
             raise ServiceError(409, "JOB_NOT_RETRYABLE", "The job cannot be retried")
         return job_record(job)
 
+    # Packaged Tauri uses the loopback service as its origin so API calls,
+    # HttpOnly cookies and the static UI share one origin. Browser/Tauri dev
+    # continue to use Vite and its /api proxy.
+    if (FRONTEND_DIR / "index.html").is_file():
+        app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
     return app
 
 

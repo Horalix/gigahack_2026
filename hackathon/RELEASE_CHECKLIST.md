@@ -17,6 +17,7 @@
 - [x] One real 20-second Romanian sample window passed through local preview API on the 3070 Ti in 14.42s including request/model setup; temporary audio was removed and VRAM returned to 0 MiB.
 - [x] Laptop8 completed a 3,600-second input soak from repeated authorized challenge audio: app reached `ready` with 143 segments and 9 decision items in 1,143.79s; minimum available RAM 2.63 GiB; peak device-wide GPU use 4,831 MiB. This shows no OOM/interruption on the repeated-audio soak, not a genuine one-hour meeting or semantic accuracy.
 - [x] `scripts/windows-build.ps1 -Task package` produced the Notavra MSI and NSIS installers on Windows.
+- [x] Packaged UI/API origin test serves the generated page and authenticates with the same-origin strict session cookie; the Tauri release configuration builds successfully.
 
 ## Must remain disclosed as open
 
@@ -27,6 +28,7 @@
 - [ ] Human review of Romanian transcription, medical terms, negation, names, numbers and extracted actions. The Microsoft share page was inaccessible; the saved reference is machine-generated.
 - [ ] Integrated real-audio browser/Tauri manual review of search, passage playback, edit, reprocess, approval and artifact download after the latest branch commits.
 - [ ] Install and launch the package on a clean machine. The release installers build successfully; no clean-machine installation has been tested.
+- [ ] Visible Tauri sign-in/upload smoke against the packaged local API. The same-origin contract test passes; the smoke could not start while port 8000 was already occupied.
 - [ ] Affan confirms his SMTP path can attach the generated file; his delivery implementation is outside this branch.
 
 ## Privacy and release boundary
