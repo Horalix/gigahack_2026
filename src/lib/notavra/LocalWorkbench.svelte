@@ -4,7 +4,7 @@
   type User = { id: string; username: string; role: string };
   type Meeting = { id: string; title: string; recordedAt: string; status: string; outputLanguage: string; transcriptRevision: number; legalHold?: boolean };
   type Segment = { id: string; startMs: number; endMs: number; text: string; language: string };
-  type Patient = { id: string; displayName: string; hospitalReference: string | null; status: string; meetings?: { id: string; title: string; recordedAt: string; status: string }[] };
+  type Patient = { id: string; displayName: string; hospitalReference: string | null; status: string; canDelete?: boolean; linkedMeetingCount?: number; meetings?: { id: string; title: string; recordedAt: string; status: string }[] };
   type Capture = { id: string; state: string; next_sequence: number; received_bytes: number; error_code?: string | null };
   type DeletionEvent = { actorId: string; actorUsername: string | null; subjectType: string; subjectId: string; action: string; createdAt: string; transcriptRevision: number | null };
   type Profile = { id: string; hardware: { gpu: string; vram_gb: number }; asrFilesPresent: boolean; llmFilePresent: boolean; compatible: boolean };
@@ -161,6 +161,20 @@
   async function openPatient(patientId: string) {
     const result = await request<{ patient: Patient }>(`/patients/${patientId}`);
     selectedPatient = result.patient;
+  }
+
+  async function deletePatient() {
+    if (!selectedPatient) return;
+    const patient = selectedPatient;
+    const linkedCount = patient.linkedMeetingCount ?? 0;
+    const message = `Delete the patient record for ${patient.displayName} and remove its links from ${linkedCount} meeting${linkedCount === 1 ? "" : "s"}? The meetings, recordings, transcripts and approved files will remain unchanged. This cannot be undone.`;
+    if (!window.confirm(message)) return;
+    try {
+      const result = await request<{ linkedMeetingCount: number }>(`/patients/${patient.id}`, { method: "DELETE" });
+      selectedPatient = null;
+      await loadPatients();
+      status = `Patient record removed. ${result.linkedMeetingCount} linked meeting${result.linkedMeetingCount === 1 ? "" : "s"} remain in the workspace.`;
+    } catch (e) { showError(e); }
   }
 
   async function createPatient(event: SubmitEvent) {
@@ -834,7 +848,7 @@
     {:else if directoryView}
       <div class="columns">
         <aside><div class="panel-head"><h2>Patients</h2><span class="muted">{patientTotal} records</span></div><input aria-label="Search patients" placeholder="Name or hospital reference" bind:value={patientQuery} oninput={patientSearchChanged} /><ul class="meeting-list">{#each patients as patient (patient.id)}<li><button class:chosen={selectedPatient?.id === patient.id} onclick={() => openPatient(patient.id).catch(showError)}><b>{patient.displayName}</b><small>{patient.hospitalReference || "No hospital reference"} · {patient.status}</small></button></li>{/each}</ul>{#if patientHasMore}<button class="quiet" onclick={() => patientCursor && loadPatients(patientCursor, true).catch(showError)}>Show more</button>{/if}<form class="new-meeting" onsubmit={createPatient}><h3>Add patient</h3><label>Name<input name="displayName" required maxlength="160" /></label><label>Hospital reference<input name="hospitalReference" maxlength="120" /></label><button class="primary">Save patient</button></form></aside>
-        <section class="content">{#if selectedPatient}<div class="panel-head"><div><p class="eyebrow">Patient record</p><h1>{selectedPatient.displayName}</h1><p class="muted">{selectedPatient.hospitalReference || "No hospital reference"} · {selectedPatient.status}</p></div><button class="primary" onclick={() => { directoryView = false; detail = null; }}>Start linked meeting</button></div><section class="panel"><h2>Linked meetings</h2>{#if selectedPatient.meetings?.length}<ul class="meeting-list">{#each selectedPatient.meetings as meeting (meeting.id)}<li><button onclick={() => { directoryView = false; openMeeting(meeting.id).catch(showError); }}><b>{meeting.title}</b><small>{new Date(meeting.recordedAt).toLocaleString()} · {meeting.status}</small></button></li>{/each}</ul>{:else}<p>No meetings are linked to this patient.</p>{/if}</section>{:else}<div class="empty"><span>02</span><h1>Patient directory</h1><p>Search by name or local hospital reference, or add a minimal patient record.</p></div>{/if}</section>
+        <section class="content">{#if selectedPatient}<div class="panel-head"><div><p class="eyebrow">Patient record</p><h1>{selectedPatient.displayName}</h1><p class="muted">{selectedPatient.hospitalReference || "No hospital reference"} · {selectedPatient.status}</p></div><div class="downloads"><button class="primary" onclick={() => { directoryView = false; detail = null; }}>Start linked meeting</button>{#if selectedPatient.canDelete}<button class="quiet" onclick={deletePatient}>Delete patient record</button>{/if}</div></div><p class="muted">Deleting a patient removes the identity and meeting links only. Meeting content remains in the workspace.</p><section class="panel"><h2>Linked meetings</h2>{#if selectedPatient.meetings?.length}<ul class="meeting-list">{#each selectedPatient.meetings as meeting (meeting.id)}<li><button onclick={() => { directoryView = false; openMeeting(meeting.id).catch(showError); }}><b>{meeting.title}</b><small>{new Date(meeting.recordedAt).toLocaleString()} · {meeting.status}</small></button></li>{/each}</ul>{:else}<p>No meetings are linked to this patient.</p>{/if}</section>{:else}<div class="empty"><span>02</span><h1>Patient directory</h1><p>Search by name or local hospital reference, or add a minimal patient record.</p></div>{/if}</section>
       </div>
     {:else}
     <div class="columns">

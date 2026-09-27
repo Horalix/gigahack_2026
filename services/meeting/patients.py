@@ -89,6 +89,10 @@ class PatientDirectory:
             if not row:
                 return None
             result = self._record(row)
+            result["canDelete"] = row["created_by"] == actor["id"] or actor["role"] == "administrator"
+            result["linkedMeetingCount"] = db.execute(
+                "SELECT COUNT(*) FROM patient_meetings WHERE patient_id=? AND organization_id=?",
+                (patient_id, actor["organization_id"])).fetchone()[0]
             refs = db.execute("""SELECT m.id,m.title,m.recorded_at,m.status FROM patient_meetings pm
                 JOIN meetings m ON m.id=pm.meeting_id AND m.organization_id=pm.organization_id
                 JOIN meeting_grants mg ON mg.meeting_id=m.id AND mg.organization_id=m.organization_id
@@ -131,6 +135,26 @@ class PatientDirectory:
             if result.rowcount != 1:
                 return None
         return self.get(actor, patient_id)
+
+    def delete(self, actor: dict, patient_id: str) -> dict | None:
+        with self.store.transaction() as db:
+            patient = db.execute("""SELECT id FROM patients WHERE id=? AND organization_id=?
+                AND (created_by=? OR ?)""",
+                (patient_id, actor["organization_id"], actor["id"], actor["role"] == "administrator")).fetchone()
+            if not patient:
+                return None
+            meeting_count = db.execute("SELECT COUNT(*) FROM patient_meetings WHERE patient_id=? AND organization_id=?",
+                                       (patient_id, actor["organization_id"])).fetchone()[0]
+            db.execute("DELETE FROM patient_meetings WHERE patient_id=? AND organization_id=?",
+                       (patient_id, actor["organization_id"]))
+            db.execute("DELETE FROM patients WHERE id=? AND organization_id=?",
+                       (patient_id, actor["organization_id"]))
+            db.execute("""INSERT INTO deletion_audit
+                (id,organization_id,actor_id,subject_type,subject_id,action,created_at,transcript_revision)
+                VALUES(?,?,?,?,?,?,?,NULL)""",
+                (str(uuid.uuid4()), actor["organization_id"], actor["id"], "patient", patient_id,
+                 "patient_identity_purged", timestamp()))
+            return {"linkedMeetingCount": meeting_count}
 
     def link_meeting(self, actor: dict, patient_id: str, meeting_id: str, *, linked: bool) -> bool:
         with self.store.transaction() as db:

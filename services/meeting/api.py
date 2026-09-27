@@ -342,6 +342,15 @@ def create_app(data_root: Path | None = None) -> FastAPI:
             raise ServiceError(404, "PATIENT_NOT_FOUND", "Patient not found")
         return {"patient": patient}
 
+    @app.delete("/api/patients/{patient_id}")
+    def delete_patient(patient_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        if actor["role"] == "reviewer":
+            raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot delete patient records")
+        result = PatientDirectory(db).delete(actor, patient_id)
+        if not result:
+            raise ServiceError(404, "PATIENT_NOT_FOUND", "Patient not found or deletion is not permitted")
+        return {"ok": True, **result}
+
     @app.post("/api/patients/{patient_id}/meetings/{meeting_id}", status_code=201)
     def link_patient_meeting(patient_id: str, meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
         if not PatientDirectory(db).link_meeting(actor, patient_id, meeting_id, linked=True):
