@@ -110,7 +110,8 @@ def test_new_job_freezes_selected_model_settings(tmp_path, monkeypatch):
         assert uploaded.status_code == 201, uploaded.text
         monkeypatch.setenv("MOM_ASR_BEAM_SIZE", str(beam_size))
         return api.post(f"/api/meetings/{meeting_id}/jobs",
-            json={"profileId": "laptop8", "asrModelAlias": "whisper-large-v3-local"})
+            json={"profileId": "laptop8", "asrModelAlias": "whisper-large-v3-local",
+                  "language": "ro" if beam_size == 3 else "auto"})
 
     first = upload_and_start(3)
     second = upload_and_start(4)
@@ -118,8 +119,23 @@ def test_new_job_freezes_selected_model_settings(tmp_path, monkeypatch):
     assert first.json()["id"] != second.json()["id"]
     assert first.json()["modelConfig"]["models"]["asr"]["beam_size"] == 3
     assert second.json()["modelConfig"]["models"]["asr"]["beam_size"] == 4
+    assert first.json()["modelConfig"]["models"]["asr"]["language"] == "ro"
+    assert second.json()["modelConfig"]["models"]["asr"]["language"] == "auto"
     stored = api.get(f"/api/jobs/{first.json()['id']}")
     assert stored.json()["modelConfig"]["models"]["asr"]["beam_size"] == 3
+
+
+def test_16gb_profile_is_rejected_on_8gb_gpu(tmp_path, monkeypatch):
+    import services.meeting.api as api_module
+    api = client(tmp_path, monkeypatch)
+    meeting_id = meeting(api)
+    uploaded = api.post(f"/api/meetings/{meeting_id}/audio",
+        files={"file": ("synthetic.wav", short_wav(), "audio/wav")})
+    assert uploaded.status_code == 201
+    monkeypatch.setattr(api_module, "host_gpu_memory_gb", lambda: 8)
+    response = api.post(f"/api/meetings/{meeting_id}/jobs", json={"profileId": "hospital16"})
+    assert response.status_code == 422
+    assert response.json()["code"] == "PROFILE_INCOMPATIBLE"
 
 
 def test_no_audio_and_invalid_source_are_rejected(tmp_path, monkeypatch):

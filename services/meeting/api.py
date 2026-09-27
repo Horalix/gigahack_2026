@@ -5,6 +5,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -71,6 +72,17 @@ def segment_record(row: dict) -> dict:
             "transcriptRevision": row["transcript_revision"], "startMs": row["start_ms"],
             "endMs": row["end_ms"], "text": row["text"], "language": row["language"],
             "speakerClusterId": None, "origin": row["origin"], "words": row["words"]}
+
+
+def host_gpu_memory_gb() -> float | None:
+    try:
+        result = subprocess.run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                timeout=2, check=True)
+        values = [int(line.strip()) for line in result.stdout.decode().splitlines() if line.strip()]
+        return max(values) / 1024 if values else None
+    except (FileNotFoundError, subprocess.SubprocessError, ValueError):
+        return None
 
 
 def create_app(data_root: Path | None = None) -> FastAPI:
@@ -271,14 +283,19 @@ def create_app(data_root: Path | None = None) -> FastAPI:
     @app.get("/api/profiles")
     def get_profiles(actor: dict = Depends(principal)):
         from .models import resolve_profile
+        gpu_memory = host_gpu_memory_gb()
         choices = []
         for profile_id in ("laptop8", "hospital16", "cpu"):
             config = resolve_profile(profile_id)
             asr_path = Path(config["models"]["asr"]["path"])
             llm_path = Path(config["models"]["llm"]["path"])
+            required_vram = float(config["limits"].get("max_vram_gb", 0))
+            compatible = (profile_id == "cpu" or
+                          (gpu_memory is not None and gpu_memory >= required_vram))
             choices.append({"id": profile_id, "hardware": config["hardware"],
                             "asrAlias": config["models"]["asr"]["alias"],
                             "llmAlias": config["models"]["llm"]["alias"],
+                            "compatible": compatible, "hostVramGb": gpu_memory,
                             "asrFilesPresent": (asr_path / "model.bin").is_file(),
                             "llmFilePresent": llm_path.is_file()})
         return {"profiles": choices, "verified": False}
@@ -342,6 +359,11 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         except (ValueError, KeyError, FileNotFoundError) as exc:
             raise ServiceError(422, "PROFILE_UNAVAILABLE", str(exc)) from exc
         try:
+            if config["models"]["asr"].get("device") == "cuda":
+                gpu_memory = host_gpu_memory_gb()
+                required_vram = float(config["limits"].get("max_vram_gb", 0))
+                if gpu_memory is None or gpu_memory < required_vram:
+                    raise ServiceError(422, "PROFILE_INCOMPATIBLE", "This profile requires a compatible local NVIDIA GPU")
             validate_assets(config, kinds=("asr", "llm"))
         except ModelAssetError as exc:
             raise ServiceError(503, "MODEL_NOT_READY", "The selected local ASR model is missing or corrupt") from exc

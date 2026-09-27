@@ -4,7 +4,7 @@
   type User = { id: string; username: string; role: string };
   type Meeting = { id: string; title: string; recordedAt: string; status: string; outputLanguage: string; transcriptRevision: number };
   type Segment = { id: string; startMs: number; endMs: number; text: string; language: string };
-  type Profile = { id: string; hardware: { gpu: string; vram_gb: number }; asrFilesPresent: boolean; llmFilePresent: boolean };
+  type Profile = { id: string; hardware: { gpu: string; vram_gb: number }; asrFilesPresent: boolean; llmFilePresent: boolean; compatible: boolean };
   type Detail = { meeting: Meeting; asset: { durationMs: number; decodeWarning?: string } | null; segments: Segment[]; decisions: any };
 
   let user = $state<User | null>(null);
@@ -186,7 +186,7 @@
           {#if detail.asset}<p class="muted">Audio length: {(detail.asset.durationMs / 60000).toFixed(1)} min {#if detail.asset.decodeWarning}<span class="warning">· Audio decode warning</span>{/if}</p>{/if}
           <section class="panel"><h2>Add recording</h2><p>Upload audio or video for local transcription and meeting action extraction.</p><form class="upload-form" onsubmit={upload}>
             <label class="file-input">Recording file<input name="audio" type="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.mp4,.mov,.webm" required /></label>
-            <label>Hardware profile<select bind:value={profileId}>{#each profiles as p (p.id)}<option value={p.id}>{p.id === "laptop8" ? "Laptop · RTX 3070 Ti · 8 GB" : p.id === "hospital16" ? "Workstation · RTX 5080 · 16 GB" : p.id} {p.asrFilesPresent && p.llmFilePresent ? "· ready" : "· models missing"}</option>{/each}</select></label>
+            <label>Hardware profile<select bind:value={profileId}>{#each profiles as p (p.id)}<option value={p.id} disabled={!p.compatible}>{p.id === "laptop8" ? "Laptop · RTX 3070 Ti · 8 GB" : p.id === "hospital16" ? "Workstation · RTX 5080 · 16 GB" : p.id} {!p.compatible ? "· unavailable on this computer" : p.asrFilesPresent && p.llmFilePresent ? "· ready" : "· models missing"}</option>{/each}</select></label>
             <label>ASR language<select bind:value={language}><option value="ro">Romanian</option><option value="ru">Russian</option><option value="en">English</option><option value="auto">Auto-detect</option></select></label>
             <button class="primary" disabled={busy || !profiles.find((p) => p.id === profileId)?.asrFilesPresent || !profiles.find((p) => p.id === profileId)?.llmFilePresent}>{busy ? "Processing…" : "Transcribe recording"}</button>
           </form>{#if status}<p role="status" class="status">{status}</p>{/if}</section>
