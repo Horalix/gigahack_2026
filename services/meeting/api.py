@@ -250,6 +250,17 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         return {"users": [{"id": row["id"], "username": row["username"], "role": row["role"],
                            "active": bool(row["active"]), "createdAt": row["created_at"]} for row in db.list_users()]}
 
+    @app.get("/api/admin/deletion-audit")
+    def list_deletion_audit(limit: int = Query(default=25, ge=1, le=100),
+                             offset: int = Query(default=0, ge=0),
+                             actor: dict = Depends(administrator), db: Storage = Depends(store)):
+        events, total = db.list_deletion_audit(actor["organization_id"], limit=limit, offset=offset)
+        return {"events": [{"actorId": row["actor_id"], "actorUsername": row["username"],
+                             "subjectType": row["subject_type"], "subjectId": row["subject_id"],
+                             "action": row["action"], "createdAt": row["created_at"],
+                             "transcriptRevision": row["transcript_revision"]} for row in events],
+                "total": total, "limit": limit, "offset": offset}
+
     @app.post("/api/users", status_code=201)
     def create_user(data: CreateAccount, request: Request, _actor: dict = Depends(administrator)):
         try:

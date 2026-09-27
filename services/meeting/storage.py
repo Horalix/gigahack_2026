@@ -15,7 +15,7 @@ from typing import Iterator
 
 LEASE_SECONDS = 30
 MAX_CAPTURE_BYTES = 2 * 1024 * 1024 * 1024
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 def default_data_root() -> Path:
@@ -220,6 +220,9 @@ class Storage:
                 )""")
                 db.execute("CREATE INDEX capture_preview_config ON capture_preview_windows(asr_config_sha256,session_id,start_ms)")
                 db.execute("PRAGMA user_version=11")
+            if current < 12:
+                db.execute("ALTER TABLE deletion_audit ADD COLUMN transcript_revision INTEGER")
+                db.execute("PRAGMA user_version=12")
 
     def asset_path(self, meeting_id: str, asset_id: str, suffix: str) -> Path:
         # IDs are generated locally; never put an uploaded name into a filesystem path.
@@ -353,7 +356,7 @@ class Storage:
     def purge_meeting(self, meeting_id: str, organization_id: str, actor_id: str) -> int | None:
         """Revoke a meeting and all app-managed derivatives; return cleanup queue size."""
         with self.transaction() as db:
-            meeting = db.execute("""SELECT m.id,g.permission FROM meetings m JOIN meeting_grants g
+            meeting = db.execute("""SELECT m.id,m.transcript_revision,g.permission FROM meetings m JOIN meeting_grants g
                 ON g.meeting_id=m.id AND g.organization_id=m.organization_id
                 WHERE m.id=? AND m.organization_id=? AND g.user_id=?""",
                 (meeting_id, organization_id, actor_id)).fetchone()
@@ -398,9 +401,10 @@ class Storage:
                 db.execute("INSERT OR IGNORE INTO file_cleanup(storage_key,queued_at) VALUES(?,?)",
                            (key, timestamp()))
             db.execute("""INSERT INTO deletion_audit
-                (id,organization_id,actor_id,subject_type,subject_id,action,created_at)
-                VALUES(?,?,?,?,?,?,?)""",
-                (str(uuid.uuid4()), organization_id, actor_id, "meeting", meeting_id, "purge_requested", timestamp()))
+                (id,organization_id,actor_id,subject_type,subject_id,action,created_at,transcript_revision)
+                VALUES(?,?,?,?,?,?,?,?)""",
+                (str(uuid.uuid4()), organization_id, actor_id, "meeting", meeting_id, "purge_requested",
+                 timestamp(), meeting["transcript_revision"]))
         return self.flush_file_cleanup()
 
     def flush_file_cleanup(self) -> int:
@@ -429,6 +433,17 @@ class Storage:
             with closing(self.connect()) as db:
                 db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         return pending
+
+    def list_deletion_audit(self, organization_id: str, *, limit: int = 25,
+                            offset: int = 0) -> tuple[list[dict], int]:
+        with closing(self.connect()) as db:
+            total = db.execute("SELECT COUNT(*) FROM deletion_audit WHERE organization_id=?",
+                               (organization_id,)).fetchone()[0]
+            rows = db.execute("""SELECT a.actor_id,u.username,a.subject_type,a.subject_id,a.action,
+                a.created_at,a.transcript_revision FROM deletion_audit a LEFT JOIN users u ON u.id=a.actor_id
+                WHERE a.organization_id=? ORDER BY a.created_at DESC,a.id DESC LIMIT ? OFFSET ?""",
+                (organization_id, limit, offset)).fetchall()
+            return [dict(row) for row in rows], total
 
     def installation_organization(self) -> str:
         with closing(self.connect()) as db:
