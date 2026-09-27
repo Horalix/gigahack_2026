@@ -87,3 +87,20 @@ def test_stale_batch_is_rejected_without_partial_revision(tmp_path):
     })
     assert response.status_code == 409
     assert api.get(f"/api/meetings/{meeting_id}").json()["meeting"]["transcriptRevision"] == 1
+
+
+def test_reviewer_role_cannot_edit_even_with_editor_meeting_grant(tmp_path):
+    app, organization_id = setup_app(tmp_path)
+    owner, _ = logged_in(app)
+    meeting_id = make_meeting(owner)
+    transcript_fixture(owner, meeting_id)
+    reviewer = app.state.auth.create_user(organization_id, "reviewer", "correct horse battery staple", "reviewer")
+    assert owner.post(f"/api/meetings/{meeting_id}/grants", json={
+        "userId": reviewer["id"], "permission": "editor",
+    }).status_code == 201
+    reviewer_api, login = logged_in(app, "reviewer")
+    assert login.status_code == 200
+    edited = reviewer_api.put(f"/api/meetings/{meeting_id}/segments/segment-0", json={
+        "transcriptRevision": 1, "text": "Should stay read only",
+    })
+    assert edited.status_code == 403 and edited.json()["code"] == "ROLE_READ_ONLY"

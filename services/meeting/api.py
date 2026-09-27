@@ -383,6 +383,8 @@ def create_app(data_root: Path | None = None) -> FastAPI:
     def revise_segment(meeting_id: str, segment_id: str, data: ReviseSegment,
                        actor: dict = Depends(principal), db: Storage = Depends(store)):
         meeting_or_404(meeting_id, actor, db, write=True)
+        if actor["role"] == "reviewer":
+            raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot edit transcripts")
         try:
             segment = db.revise_segment(meeting_id, actor["organization_id"], segment_id,
                                         actor["id"], data.transcriptRevision, data.text)
@@ -396,6 +398,8 @@ def create_app(data_root: Path | None = None) -> FastAPI:
     def revise_segments(meeting_id: str, data: ReviseSegments,
                         actor: dict = Depends(principal), db: Storage = Depends(store)):
         meeting_or_404(meeting_id, actor, db, write=True)
+        if actor["role"] == "reviewer":
+            raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot edit transcripts")
         try:
             segments = db.revise_segments(meeting_id, actor["organization_id"], actor["id"],
                                           data.transcriptRevision,
@@ -411,6 +415,8 @@ def create_app(data_root: Path | None = None) -> FastAPI:
     def undo_transcript_revision(meeting_id: str, data: UndoTranscriptRevision,
                                  actor: dict = Depends(principal), db: Storage = Depends(store)):
         meeting_or_404(meeting_id, actor, db, write=True)
+        if actor["role"] == "reviewer":
+            raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot edit transcripts")
         segments = db.undo_transcript_revision(meeting_id, actor["organization_id"], actor["id"],
                                                data.transcriptRevision)
         if segments is None:
