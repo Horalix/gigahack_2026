@@ -1,6 +1,6 @@
 # Model switching and the 900-second budget
 
-**Design and experiment plan, not a measured performance promise.** Confirmed by the user: RTX 3070 Ti Mobile with 8 GB VRAM and 24 GB system RAM; remote RTX 5080 with 16 GB VRAM available for comparison. Laptop power limits, drivers, usable memory, remote system RAM, and actual throughput still need measurement.
+**Plan plus current experiment evidence; see [ASR comparison results](ASR_COMPARISON_RESULTS.md) and the [PBI index](pbis/README.md) for live status.** Confirmed by the user: RTX 3070 Ti Mobile with 8 GB VRAM and 24 GB system RAM; remote RTX 5080 with 16 GB VRAM available for comparison. Laptop Whisper batch 2 has run twice on the same 702.5s Romanian sample (46.7s, 51.64% WER, 35.28% CER, 4,539 MiB observed device-wide peak). The 5080 host and a full one-hour pipeline remain untested; the reported 12.2 min/hour value is a stage-sum projection.
 
 ## Make configuration switchable
 
@@ -22,8 +22,8 @@ Proposed environment defaults:
 MOM_PROFILE=laptop8
 MOM_ASR_BACKEND=faster_whisper
 MOM_ASR_MODEL=whisper-large-v3-local
-MOM_ASR_COMPUTE_TYPE=int8_float16
-MOM_ASR_BATCH_SIZE=1
+MOM_ASR_COMPUTE_TYPE=float16
+MOM_ASR_BATCH_SIZE=2
 MOM_ASR_BEAM_SIZE=5
 MOM_LLM_BACKEND=llama_cpp
 MOM_LLM_MODEL=qwen35-4b-q4km-local
@@ -50,15 +50,15 @@ Adapters own native runtime details. Changing a checkpoint supported by an adapt
 
 | Profile | Initial experiment | Scheduling | Qualification |
 |---|---|---|---|
-| `laptop8` | Full Whisper large-v3 via faster-whisper, `int8_float16`, beam 5, batch 1 initially; Qwen3.5-4B Q4_K_M | ASR unloads before LLM loads; bounded context | RTX 3070 Ti Mobile / 8 GB VRAM / 24 GB RAM; measure memory and power limits |
-| `hospital16` | Same models and settings first; then compare batches 2/4/8 and FP16 against INT8 | Same sequential stages initially | Remote RTX 5080 / 16 GB VRAM; benchmark locally on that host with permitted data |
+| `laptop8` | Full Whisper large-v3 via faster-whisper, FP16, beam 5, batch 2; Qwen3.5-4B Q4_K_M | ASR unloads before LLM loads; bounded context | Tested on RTX 3070 Ti Mobile / 8 GB VRAM / 24 GB RAM for one 11m43s Romanian sample; one-hour profile still unqualified |
+| `hospital16` | Same models; FP16, beam 5, batch 4; Qwen runtime CUDA 13 | Same sequential stages | Configured for remote RTX 5080 / 16 GB VRAM; actual host is not tested |
 | `cpu` | Smaller/quantized multilingual ASR and compact quantized LLM | Bounded threads/RAM | Functional offline fallback; no 15-minute claim without a run |
 
 Updated first ASR candidate: **`Systran/faster-whisper-large-v3`**, a CTranslate2 conversion of full Whisper large-v3. faster-whisper is the runtime; Turbo is a different checkpoint choice. Download during preparation, then load a pinned local directory. Use transcription rather than translation, with word timestamps; timing estimates do not certify the words. Do not assume automatic language detection handles intra-sentence switching correctly: test all three languages together.
 
 Updated first LLM candidate: **Qwen3.5-4B Q4_K_M**, text-only use through a compatible pinned llama.cpp build and verified GGUF artifact. Pin its chat template and test constrained JSON plus the chosen thinking/non-thinking setting; cap output tokens. The upstream model card is not verification of a particular third-party GGUF or local runtime build. This supersedes the earlier Qwen3-4B-Instruct-2507 suggestion; no hospital-domain superiority has been measured.
 
-**Batch 1 is a memory-safe starting experiment, not the final speed choice.** After measuring peak VRAM and accuracy, try batch 2 and 4 on the laptop too. Keep beam 5 as the quality baseline; compare smaller beams only on the same held-out cases. Full large-v3 may fit without requiring Turbo, but the 900-second end-to-end run decides whether its quality/speed tradeoff works. Keep Turbo as the second ASR checkpoint to compare, not an automatic quality downgrade based only on 8 GB VRAM.
+**Laptop batch 2 is the current measured setting.** Two runs were 2.54× faster than the previous batch-1 run with essentially unchanged WER; CER was about 2 points higher. Beam 1 was slower and worse, so keep beam 5. Full large-v3 fits the observed 8 GB laptop workload with current admission limits. The 900-second end-to-end run remains the acceptance gate. `hospital16` batch 4 is a configuration choice, not a performance result.
 
 Parakeet TDT 0.6B v3 remains P2: an optional independent recognizer for selected difficult spans, loaded in a separate stage. Its published language list includes RO/RU/EN; that does not establish our mixed-sentence performance. Do not add it until P0 succeeds and a paired test demonstrates useful corrections within the time budget.
 

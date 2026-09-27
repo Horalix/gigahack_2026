@@ -1,6 +1,6 @@
 # Priorities and acceptance
 
-**The [PBI index](pbis/README.md) replaces the previous H01-H17 board and 48-hour schedule.** All new work is OPEN until verified. The deadline is today, 26 September 2026.
+**Updated 27 September 2026. The [PBI index](pbis/README.md) is the execution source of truth.** This is the priority and acceptance plan; current code/test evidence is in each PBI and the [team handoff](10-team-handoff.md). Leave any gate OPEN without direct evidence.
 
 ## Required before optional
 
@@ -24,6 +24,7 @@ All are P0, including user-added patient search, live mode and manual correction
 - Manual edits preserve raw source and rebuild dependent output; stale files cannot remain ready.
 - A prepared offline cold start processes new input. Models and frontend assets are local.
 - A genuine one-hour upload reaches observed email receipt in <=900 seconds with Affan. File-ready alone does not prove this gate. Report live lag and Stop-to-receipt separately.
+- Current laptop batch-2 ASR plus the earlier local LLM stage projects to 12.2 minutes/hour by linear stage sum. This is below 15 minutes on paper, but a complete hour and end-to-end receipt are not measured; the target stays OPEN.
 - Report actual hardware, model hashes, stage times, memory, language/critical-term errors and action correctness. Separate raw, machine-only and reviewed results.
 - Keep real sensitive data outside Git/OneDrive. Demonstrate with permitted/synthetic material; real patient use needs PBI-022.
 

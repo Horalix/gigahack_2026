@@ -1,6 +1,6 @@
 # Secure MOM: start here
 
-**Updated 26 September 2026 · deadline: today · current implementation checkpoint: `noomy/freepalestine`, `820f1a9`.**
+**Updated 27 September 2026 · active app branch: `codex/notavra-finalization` (`ea75e76`) · benchmark branch: `codex/asr-benchmark-final` (`1839a8e`).**
 
 **Start with [the live team handoff](10-team-handoff.md), then [the PBI index](pbis/README.md).** The handoff governs current staffing and state; the index governs priorities, dependencies, model assignments and completion. Completed PBIs move to `pbis/completed/` with acceptance evidence. Read [patient data and EU gates](09-patient-data-and-eu.md) before implementing patient features.
 
@@ -22,6 +22,9 @@ This folder is the GigaHack plan. Existing `docs/` describe the older FeelSay pr
 | [08 — Judging strategy](08-judging-strategy.md) | What distinguishes us in each weighted category; proof and demo | Everyone |
 | [09 — Patients and EU](09-patient-data-and-eu.md) | Patient scope, privacy, ethics and pilot gates | Everyone |
 | [10 — Live team handoff](10-team-handoff.md) | Current evidence, epic split and integration boundaries | Both developers and their AI |
+| [Demo runbook](DEMO.md) | Verified demo path and narration cues | CEO + demo operator |
+| [Pitch notes](PITCH.md) | Short pitch, evidence and judge answers | CEO |
+| [Release checklist](RELEASE_CHECKLIST.md) | Passed checks, open gates and privacy boundary | Everyone |
 | [PBIs — Execution backlog](pbis/README.md) | Tasks, dependencies, model assignments and archive | Executors |
 
 ## What we must deliver
@@ -44,9 +47,9 @@ All inference and delivery stay on the laptop or hospital LAN. Romanian, Russian
 | UX | 10% | Simple upload/record, honest progress, fast automatic delivery |
 | Presentation | 10% | Clear architecture, measured results, convincing complete demo |
 
-Reference deployment: **one 16 GB GPU server, or CPU-only with 32 GB RAM**. Our demo laptop is an **RTX 3070 Ti Mobile, 8 GB VRAM, 24 GB system RAM**. A remotely accessible **RTX 5080 with 16 GB VRAM** in another country is available for development/benchmarking; its system RAM and software stack remain unverified. Drivers, usable VRAM, and laptop power limits still need inventory. Target: **a 60-minute recording reaches local email within 900 seconds**. Neither hardware profile has been benchmarked for this application. The laptop's 24 GB RAM is not the specified 32 GB CPU-only reference configuration.
+Reference deployment: **one 16 GB GPU server, or CPU-only with 32 GB RAM**. Our demo laptop is an **RTX 3070 Ti Mobile, 8 GB VRAM, 24 GB system RAM**. The 8 GB laptop has run the local app and the ASR benchmark; its current Whisper batch-2 profile passed two identical 11m43s Romanian runs. A remotely accessible **RTX 5080 with 16 GB VRAM** is available for development/benchmarking, but that host has not been reached or tested from this checkout. Target: **a 60-minute recording reaches local email within 900 seconds**. The current 12.2-minute/hour value is a stage-sum projection, not a full-hour end-to-end result. The laptop's 24 GB RAM is not the specified 32 GB CPU-only reference configuration.
 
-Updated starting candidates: full Whisper large-v3 through faster-whisper (`int8_float16`, beam 5, sequential windows), then local Qwen3.5-4B Q4_K_M. Turbo remains a speed comparison/fallback; Parakeet remains optional. See [profile details and remote-testing boundaries](03-models-and-performance.md).
+Current model choice: Whisper large-v3 through faster-whisper (laptop: FP16, batch 2, beam 5) plus local Qwen3.5-4B Q4_K_M. The same-sample benchmark favored Whisper over OmniASR CTC and OmniASR LLM; its saved Microsoft reference is not human-verified. The 16 GB profile is configured for batch 4/CUDA 13 and remains untested. See [the comparison results](ASR_COMPARISON_RESULTS.md) and [profile details](03-models-and-performance.md).
 
 The brief calls for a local open-weights ASR, local LLM, routing automation, and minimal internal web UI. Whisper is explicitly an example. Python/Node and self-hosted n8n are expected stack choices; the automation functionality is required. CEO should confirm whether the organizer expects n8n itself. Mailpit/MailHog is explicitly acceptable for offline email; Gmail/Outlook/external SMTP is not.
 
@@ -54,7 +57,7 @@ The brief calls for a local open-weights ASR, local LLM, routing automation, and
 
 - Keep this repository, Svelte tooling, and useful existing code. Add a local Python meeting service; retain Tauri as an optional Windows capture client.
 - Deliver the complete **upload path first**, then live microphone recording with provisional transcript. **Both audio/video upload and live mode are P0 team requirements.** The brief allows either input; the team explicitly wants both. Voice enrollment and live decision previews remain optional.
-- Use one ASR and one compact local LLM first. Choose exact artifacts using our clips and hardware; no claimed winner before measurement.
+- Use Whisper large-v3 and local Qwen for the current demo, based on same-sample model comparison. Keep Romanian selected for Romanian-only input. No clinical-accuracy claim follows from the machine reference.
 - Keep source audio and original transcript. Generate bounded structured actions, validate them, and render minutes deterministically.
 - P0 includes manual transcript correction with preview/undo and dependent-minutes refresh. AI error flags and fast find-like review are the first P1 enhancement, ahead of speaker enrollment. Suggestions never silently overwrite speech.
 - Produce a validated, versioned output file for **Affan, who owns mailing**. Confirm format and handoff trigger in PBI-001. This backlog does not plan his implementation.
