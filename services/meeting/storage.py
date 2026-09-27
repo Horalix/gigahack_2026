@@ -374,6 +374,9 @@ class Storage:
             asset_directory = self.assets_dir / meeting_id
             if asset_directory.is_dir():
                 paths.update(self.relative_key(path) for path in asset_directory.rglob("*") if path.is_file())
+            artifact_directory = self.root / "artifacts" / meeting_id
+            if artifact_directory.is_dir():
+                paths.update(self.relative_key(path) for path in artifact_directory.rglob("*") if path.is_file())
             for job_id in job_ids:
                 paths.add(self.relative_key(self.asset_path(meeting_id, job_id, ".transcript.json")))
             paths.update(row["storage_key"] for row in db.execute(

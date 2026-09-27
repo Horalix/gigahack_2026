@@ -34,6 +34,51 @@ def test_owner_purge_removes_managed_audio_and_incomplete_capture(tmp_path, monk
         assert db.execute("SELECT COUNT(*) FROM meetings WHERE id=?", (meeting_id,)).fetchone()[0] == 0
 
 
+def test_owner_purge_removes_transcript_decisions_and_all_artifact_files(tmp_path, monkeypatch):
+    api = client(tmp_path, monkeypatch)
+    meeting_id = meeting(api)
+    uploaded = api.post(f"/api/meetings/{meeting_id}/audio",
+                        files={"file": ("recording.wav", short_wav(), "audio/wav")})
+    assert uploaded.status_code == 201, uploaded.text
+    asset = uploaded.json()
+    store = api.app.state.store
+    actor_id = api.get("/api/auth/me").json()["user"]["id"]
+    job_id, now = str(uuid.uuid4()), "2026-09-27T00:00:00Z"
+    decisions = {"transcriptRevision": 0, "items": []}
+    with store.transaction() as db:
+        db.execute("""INSERT INTO jobs(id,organization_id,meeting_id,asset_id,state,stage,profile_id,
+            model_config_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (job_id, asset["organizationId"], meeting_id, asset["id"], "ready", "complete", "laptop8", "{}", now, now))
+        db.execute("""INSERT INTO segments(id,organization_id,meeting_id,asset_id,job_id,transcript_revision,
+            start_ms,end_ms,text,language,origin,words_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (str(uuid.uuid4()), asset["organizationId"], meeting_id, asset["id"], job_id, 0,
+             0, 500, "Private transcript", "ro", "asr", "[]", now))
+        db.execute("""INSERT INTO decision_results(job_id,organization_id,meeting_id,transcript_revision,result_json,created_at)
+            VALUES(?,?,?,?,?,?)""",
+            (job_id, asset["organizationId"], meeting_id, 0, '{"items":[],"transcriptRevision":0}', now))
+
+    artifact = store.create_artifact(meeting_id, asset["organizationId"], actor_id, 0, decisions, b"private minutes")
+    assert artifact is not None
+    artifact_path = store.artifact_path(artifact["storage_key"])
+    checkpoint = store.asset_path(meeting_id, job_id, ".transcript.json")
+    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint.write_text("private transcript checkpoint", encoding="utf-8")
+    orphan = tmp_path / "artifacts" / meeting_id / "orphaned-after-crash.tmp"
+    orphan.write_text("unindexed private artifact", encoding="utf-8")
+
+    result = api.delete(f"/api/meetings/{meeting_id}")
+    assert result.status_code == 200, result.text
+    assert api.get(f"/api/artifacts/{artifact['id']}/content").status_code == 404
+    assert not artifact_path.exists()
+    assert not checkpoint.exists()
+    assert not orphan.exists()
+    with store.connect() as db:
+        for table in ("segments", "segment_revisions", "decision_results", "artifacts", "jobs", "assets"):
+            assert db.execute(f"SELECT COUNT(*) FROM {table} WHERE meeting_id=?", (meeting_id,)).fetchone()[0] == 0
+        audit = db.execute("SELECT action FROM deletion_audit WHERE subject_id=?", (meeting_id,)).fetchone()
+        assert audit[0] == "purge_requested"
+
+
 def test_purge_is_owner_only_and_blocked_while_job_is_active(tmp_path, monkeypatch):
     api = client(tmp_path, monkeypatch)
     meeting_id = meeting(api)
