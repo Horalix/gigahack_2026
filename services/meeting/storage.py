@@ -795,34 +795,103 @@ class Storage:
 
     def revise_segment(self, meeting_id: str, organization_id: str, segment_id: str,
                        editor_id: str, transcript_revision: int, text: str) -> dict | None:
-        clean = text.strip()
-        if not clean or len(clean) > 5000:
-            raise ValueError("Transcript text must be 1–5000 characters")
+        rows = self.revise_segments(meeting_id, organization_id, editor_id, transcript_revision,
+                                    [{"segmentId": segment_id, "text": text}])
+        return rows[0] if rows else None
+
+    def revise_segments(self, meeting_id: str, organization_id: str, editor_id: str,
+                        transcript_revision: int, corrections: list[dict]) -> list[dict] | None:
+        cleaned = []
+        seen = set()
+        for correction in corrections:
+            segment_id, text = correction["segmentId"], correction["text"].strip()
+            if not text or len(text) > 5000:
+                raise ValueError("Transcript text must be 1–5000 characters")
+            if segment_id in seen:
+                raise ValueError("A transcript passage can be corrected only once per batch")
+            seen.add(segment_id)
+            cleaned.append((segment_id, text))
         with self.transaction() as db:
             meeting = db.execute("SELECT transcript_revision FROM meetings WHERE id=? AND organization_id=?",
                                  (meeting_id, organization_id)).fetchone()
             if not meeting or meeting["transcript_revision"] != transcript_revision:
                 return None
-            segment = db.execute("""SELECT * FROM segments WHERE id=? AND meeting_id=? AND organization_id=?
-                AND transcript_revision=?""", (segment_id, meeting_id, organization_id, transcript_revision)).fetchone()
-            if not segment:
+            segments = []
+            for segment_id, text in cleaned:
+                segment = db.execute("""SELECT * FROM segments WHERE id=? AND meeting_id=? AND organization_id=?
+                    AND transcript_revision=?""", (segment_id, meeting_id, organization_id, transcript_revision)).fetchone()
+                if not segment:
+                    return None
+                segments.append((segment, text))
+            if not segments:
                 return None
             next_revision = transcript_revision + 1
-            db.execute("""INSERT INTO segment_revisions(id,organization_id,meeting_id,segment_id,editor_id,
-                from_revision,to_revision,old_text,new_text,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                (str(uuid.uuid4()), organization_id, meeting_id, segment_id, editor_id, transcript_revision,
-                 next_revision, segment["text"], clean, timestamp()))
             db.execute("UPDATE segments SET transcript_revision=? WHERE meeting_id=? AND transcript_revision=?",
                        (next_revision, meeting_id, transcript_revision))
-            db.execute("UPDATE segments SET text=? WHERE id=?", (clean, segment_id))
+            for segment, text in segments:
+                db.execute("""INSERT INTO segment_revisions(id,organization_id,meeting_id,segment_id,editor_id,
+                    from_revision,to_revision,old_text,new_text,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    (str(uuid.uuid4()), organization_id, meeting_id, segment["id"], editor_id, transcript_revision,
+                     next_revision, segment["text"], text, timestamp()))
+                db.execute("UPDATE segments SET text=? WHERE id=?", (text, segment["id"]))
             db.execute("UPDATE meetings SET transcript_revision=?,status='transcript_review',updated_at=? WHERE id=?",
                        (next_revision, timestamp(), meeting_id))
             db.execute("UPDATE artifacts SET status='superseded' WHERE meeting_id=? AND status='ready'",
                        (meeting_id,))
-            row = db.execute("SELECT * FROM segments WHERE id=?", (segment_id,)).fetchone()
-            item = dict(row)
-            item["words"] = json.loads(item.pop("words_json"))
-            return item
+            rows = db.execute("SELECT * FROM segments WHERE meeting_id=? AND transcript_revision=? ORDER BY start_ms,id",
+                              (meeting_id, next_revision)).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                item["words"] = json.loads(item.pop("words_json"))
+                result.append(item)
+            return result
+
+    def undo_transcript_revision(self, meeting_id: str, organization_id: str, editor_id: str,
+                                 transcript_revision: int) -> list[dict] | None:
+        with self.transaction() as db:
+            meeting = db.execute("SELECT transcript_revision FROM meetings WHERE id=? AND organization_id=?",
+                                 (meeting_id, organization_id)).fetchone()
+            if not meeting or meeting["transcript_revision"] != transcript_revision:
+                return None
+            revisions = db.execute("""SELECT r.* FROM segment_revisions r
+                WHERE r.meeting_id=? AND r.organization_id=? AND r.to_revision=? ORDER BY r.created_at,r.id""",
+                (meeting_id, organization_id, transcript_revision)).fetchall()
+            if not revisions:
+                return None
+            next_revision = transcript_revision + 1
+            for revision in revisions:
+                segment = db.execute("SELECT * FROM segments WHERE id=? AND meeting_id=? AND transcript_revision=?",
+                                     (revision["segment_id"], meeting_id, transcript_revision)).fetchone()
+                if not segment or segment["text"] != revision["new_text"]:
+                    return None
+            for revision in revisions:
+                segment = db.execute("SELECT text FROM segments WHERE id=?", (revision["segment_id"],)).fetchone()
+                db.execute("""INSERT INTO segment_revisions(id,organization_id,meeting_id,segment_id,editor_id,
+                    from_revision,to_revision,old_text,new_text,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    (str(uuid.uuid4()), organization_id, meeting_id, revision["segment_id"], editor_id,
+                     transcript_revision, next_revision, segment["text"], revision["old_text"], timestamp()))
+                db.execute("UPDATE segments SET text=? WHERE id=?", (revision["old_text"], revision["segment_id"]))
+            db.execute("UPDATE segments SET transcript_revision=? WHERE meeting_id=? AND transcript_revision=?",
+                       (next_revision, meeting_id, transcript_revision))
+            db.execute("UPDATE meetings SET transcript_revision=?,status='transcript_review',updated_at=? WHERE id=?",
+                       (next_revision, timestamp(), meeting_id))
+            db.execute("UPDATE artifacts SET status='superseded' WHERE meeting_id=? AND status='ready'", (meeting_id,))
+            rows = db.execute("SELECT * FROM segments WHERE meeting_id=? AND transcript_revision=? ORDER BY start_ms,id",
+                              (meeting_id, next_revision)).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                item["words"] = json.loads(item.pop("words_json"))
+                result.append(item)
+            return result
+
+    def can_undo_transcript_revision(self, meeting_id: str, organization_id: str,
+                                     transcript_revision: int) -> bool:
+        with closing(self.connect()) as db:
+            return db.execute("""SELECT 1 FROM segment_revisions
+                WHERE meeting_id=? AND organization_id=? AND to_revision=? LIMIT 1""",
+                (meeting_id, organization_id, transcript_revision)).fetchone() is not None
 
     def save_decisions(self, job: dict, worker_id: str, result: dict) -> None:
         with self.transaction() as db:

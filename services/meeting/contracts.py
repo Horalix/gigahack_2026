@@ -32,6 +32,26 @@ class ReviseSegment(BaseModel):
     text: str = Field(min_length=1, max_length=5000)
 
 
+class SegmentCorrection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    segmentId: str = Field(min_length=1, max_length=128)
+    text: str = Field(min_length=1, max_length=5000)
+
+
+class ReviseSegments(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transcriptRevision: int = Field(ge=1)
+    corrections: list[SegmentCorrection] = Field(min_length=1, max_length=500)
+
+
+class UndoTranscriptRevision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transcriptRevision: int = Field(ge=1)
+
+
 class CreateJob(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

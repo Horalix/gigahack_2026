@@ -15,7 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import AuthService, SESSION_COOKIE, SESSION_SECONDS
-from .contracts import CreateAccount, CreateCapture, CreateJob, CreateMeeting, CreatePatient, ErrorEnvelope, FinalizeArtifact, GrantMeetingAccess, LoginRequest, ReviseSegment, SealCapture, SetAccountActive, SetupRequest, UpdatePatient
+from .contracts import CreateAccount, CreateCapture, CreateJob, CreateMeeting, CreatePatient, ErrorEnvelope, FinalizeArtifact, GrantMeetingAccess, LoginRequest, ReviseSegment, ReviseSegments, SealCapture, SetAccountActive, SetupRequest, UndoTranscriptRevision, UpdatePatient
 from .capture import CaptureError, seal_capture
 from .media import MAX_UPLOAD_BYTES, MediaError, decode
 from .patients import PatientDirectory
@@ -305,6 +305,7 @@ def create_app(data_root: Path | None = None) -> FastAPI:
                 "asset": asset_record(db.latest_asset(meeting_id, actor["organization_id"])),
                 "segments": [segment_record(row) for row in db.get_segments(meeting_id, actor["organization_id"])],
                 "decisions": db.get_meeting_decisions(meeting_id, actor["organization_id"]),
+                "canUndoCorrection": db.can_undo_transcript_revision(meeting_id, actor["organization_id"], meeting["transcript_revision"]),
                 "captures": db.list_open_captures(meeting_id, actor["organization_id"]),
                 "artifact": artifact_record(artifact) if artifact else None}
 
@@ -360,6 +361,32 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         if not segment:
             raise ServiceError(409, "TRANSCRIPT_REVISION_CONFLICT", "Transcript changed; reload before editing")
         return segment_record(segment)
+
+    @app.put("/api/meetings/{meeting_id}/segments")
+    def revise_segments(meeting_id: str, data: ReviseSegments,
+                        actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting_or_404(meeting_id, actor, db, write=True)
+        try:
+            segments = db.revise_segments(meeting_id, actor["organization_id"], actor["id"],
+                                          data.transcriptRevision,
+                                          [item.model_dump() for item in data.corrections])
+        except ValueError as exc:
+            raise ServiceError(422, "TRANSCRIPT_TEXT_INVALID", str(exc)) from exc
+        if segments is None:
+            raise ServiceError(409, "TRANSCRIPT_REVISION_CONFLICT", "Transcript changed; reload before editing")
+        return {"transcriptRevision": data.transcriptRevision + 1,
+                "segments": [segment_record(segment) for segment in segments]}
+
+    @app.post("/api/meetings/{meeting_id}/transcript/undo")
+    def undo_transcript_revision(meeting_id: str, data: UndoTranscriptRevision,
+                                 actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting_or_404(meeting_id, actor, db, write=True)
+        segments = db.undo_transcript_revision(meeting_id, actor["organization_id"], actor["id"],
+                                               data.transcriptRevision)
+        if segments is None:
+            raise ServiceError(409, "TRANSCRIPT_REVISION_CONFLICT", "No matching correction revision can be undone")
+        return {"transcriptRevision": data.transcriptRevision + 1,
+                "segments": [segment_record(segment) for segment in segments]}
 
     @app.get("/api/meetings/{meeting_id}/grants")
     def get_meeting_grants(meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):

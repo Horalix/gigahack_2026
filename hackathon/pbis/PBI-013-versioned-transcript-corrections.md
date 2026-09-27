@@ -41,8 +41,8 @@ LLM suggestions, arbitrary whole-file text rewriting, mail retry/recall, destruc
 
 ## Completion record
 
-- Commit / changed files: pending
-- Commands and observed behavior: pending
-- Acceptance evidence / limitations: pending
+- Commit / changed files: `pending`; revision-checked single and atomic multi-passage corrections, authenticated undo as an inverse revision, persisted editor/text audit entries, and transcript review UI affordance.
+- Commands and observed behavior: `python -m pytest services/meeting/tests -q` (43 passed); `npm run check` (0 errors/warnings); `npm run build` passed. New API tests cover two-passage correction, stale/missing passage atomic rejection, Romanian diacritics, undo history and stale undo.
+- Acceptance evidence / limitations: revisions never overwrite audit rows; each correction or undo invalidates approved artifacts and evidence-backed decisions until local reprocessing. Full-word find/highlight navigation and bulk review controls remain for PBI-014. Human verification that reprocessed actions and final HTML agree is not yet recorded, so keep this PBI OPEN.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
 

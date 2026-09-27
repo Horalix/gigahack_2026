@@ -7,7 +7,7 @@
   type Patient = { id: string; displayName: string; hospitalReference: string | null; status: string; meetings?: { id: string; title: string; recordedAt: string; status: string }[] };
   type Capture = { id: string; state: string; next_sequence: number; received_bytes: number; error_code?: string | null };
   type Profile = { id: string; hardware: { gpu: string; vram_gb: number }; asrFilesPresent: boolean; llmFilePresent: boolean; compatible: boolean };
-  type Detail = { meeting: Meeting; asset: { durationMs: number; decodeWarning?: string } | null; segments: Segment[]; decisions: any; captures: Capture[]; artifact: { id: string; sha256: string; approvedAt: string; storageKey: string } | null };
+  type Detail = { meeting: Meeting; asset: { durationMs: number; decodeWarning?: string } | null; segments: Segment[]; decisions: any; canUndoCorrection: boolean; captures: Capture[]; artifact: { id: string; sha256: string; approvedAt: string; storageKey: string } | null };
 
   let user = $state<User | null>(null);
   let setupRequired = $state(false);
@@ -139,6 +139,17 @@
       });
       await openMeeting(detail.meeting.id);
       status = "Transcript correction saved. Recheck extracted actions before approval.";
+    } catch (e) { showError(e); }
+  }
+
+  async function undoLastCorrection() {
+    if (!detail) return;
+    try {
+      await request(`/meetings/${detail.meeting.id}/transcript/undo`, {
+        method: "POST", body: JSON.stringify({ transcriptRevision: detail.meeting.transcriptRevision }),
+      });
+      await openMeeting(detail.meeting.id);
+      status = "Last correction batch undone. Reprocess saved audio to refresh actions.";
     } catch (e) { showError(e); }
   }
 
@@ -379,7 +390,7 @@
             <label>ASR language<select bind:value={language}><option value="ro">Romanian</option><option value="ru">Russian</option><option value="en">English</option><option value="auto">Auto-detect</option></select></label>
             <button class="primary" disabled={busy || recording || !profiles.find((p) => p.id === profileId)?.asrFilesPresent || !profiles.find((p) => p.id === profileId)?.llmFilePresent}>{busy ? "Processing…" : "Transcribe recording"}</button>
           </form>{#if status}<p role="status" class="status">{status}</p>{/if}</section>
-          {#if detail.segments.length}<section class="panel"><div class="panel-head"><h2>Transcript <span>{detail.segments.length} passages · click edit to correct</span></h2><div class="downloads"><button class="quiet" onclick={() => downloadTranscript("txt")}>TXT</button><button class="quiet" onclick={() => downloadTranscript("json")}>JSON</button></div></div><div class="transcript">{#each detail.segments as segment (segment.id)}<p><time>{formatTime(segment.startMs)}</time>{#if editingSegment === segment.id}<span class="edit-cell"><textarea bind:value={editText} rows="2"></textarea><button class="primary" onclick={() => saveSegment(segment)}>Save correction</button><button class="quiet" onclick={() => (editingSegment = null)}>Cancel</button></span>{:else}<span>{segment.text}</span>{#if user.role !== "reviewer"}<button class="edit-button" onclick={() => { editingSegment = segment.id; editText = segment.text; }}>Edit</button>{/if}{/if}<small>{segment.language}</small></p>{/each}</div></section>{/if}
+          {#if detail.segments.length}<section class="panel"><div class="panel-head"><h2>Transcript <span>{detail.segments.length} passages · click edit to correct</span></h2><div class="downloads">{#if detail.canUndoCorrection && user.role !== "reviewer"}<button class="quiet" onclick={undoLastCorrection}>Undo last correction</button>{/if}<button class="quiet" onclick={() => downloadTranscript("txt")}>TXT</button><button class="quiet" onclick={() => downloadTranscript("json")}>JSON</button></div></div><div class="transcript">{#each detail.segments as segment (segment.id)}<p><time>{formatTime(segment.startMs)}</time>{#if editingSegment === segment.id}<span class="edit-cell"><textarea bind:value={editText} rows="2"></textarea><button class="primary" onclick={() => saveSegment(segment)}>Save correction</button><button class="quiet" onclick={() => (editingSegment = null)}>Cancel</button></span>{:else}<span>{segment.text}</span>{#if user.role !== "reviewer"}<button class="edit-button" onclick={() => { editingSegment = segment.id; editText = segment.text; }}>Edit</button>{/if}{/if}<small>{segment.language}</small></p>{/each}</div></section>{/if}
           {#if detail.decisions}<section class="panel"><h2>Decisions and actions <span>human review required</span></h2>{#if detail.decisions.items?.length}{#each detail.decisions.items as item (item.id)}<article class="action-card"><div class="action-title"><span class="action-kind">{item.kind}</span><span class="action-state">{item.status}</span><b>{item.text}</b></div><div class="action-meta">{#if item.ownerLabel}<span>Owner: {item.ownerLabel}</span>{/if}{#if item.originalDateExpression}<span>Due: {item.originalDateExpression}</span>{/if}</div>{#each item.taskEvidence as evidence (evidence.segmentId + evidence.startMs)}<blockquote><time>{formatTime(evidence.startMs)}</time>“{evidence.quote}”</blockquote>{/each}</article>{/each}{:else}<p>No decisions or follow-up actions were identified.</p>{/if}<small class="review-note">Suggested by local AI and backed by transcript excerpts. Confirm or correct before use.</small></section>{/if}
           {#if detail.artifact}<p class="status">Current approved file · revision {detail.meeting.transcriptRevision} · SHA-256 {detail.artifact.sha256} · <a href={`/api/artifacts/${detail.artifact.id}/content`}>Download again</a></p>{/if}
           {#if detail.decisions && user.role !== "reviewer"}<section class="panel"><label class="approval"><input type="checkbox" bind:checked={reviewConfirmed} /> I reviewed the transcript and every suggested decision/action above.</label><button class="primary" disabled={!reviewConfirmed} onclick={approveAndDownload}>Approve and download HTML minutes</button><p class="muted">This creates a local, self-contained file for the current transcript revision. Corrections supersede it.</p></section>{/if}
