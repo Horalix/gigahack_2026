@@ -1079,3 +1079,34 @@ class Storage:
                 WHERE d.meeting_id=? AND d.organization_id=? AND d.transcript_revision=m.transcript_revision
                 ORDER BY d.created_at DESC,d.job_id DESC LIMIT 1""", (meeting_id, organization_id)).fetchone()
             return json.loads(row["result_json"]) if row else None
+
+    def review_decision(self, meeting_id: str, organization_id: str, actor_id: str,
+                        transcript_revision: int, decision_id: str, review_status: str) -> dict | None:
+        now = timestamp()
+        with self.transaction() as db:
+            meeting = db.execute("SELECT transcript_revision FROM meetings WHERE id=? AND organization_id=?",
+                                 (meeting_id, organization_id)).fetchone()
+            if not meeting or meeting["transcript_revision"] != transcript_revision:
+                return None
+            row = db.execute("""SELECT d.job_id,d.result_json FROM decision_results d JOIN jobs j
+                ON j.id=d.job_id AND j.state='ready'
+                WHERE d.meeting_id=? AND d.organization_id=? AND d.transcript_revision=?
+                ORDER BY d.created_at DESC,d.job_id DESC LIMIT 1""",
+                (meeting_id, organization_id, transcript_revision)).fetchone()
+            if not row:
+                return None
+            result = json.loads(row["result_json"])
+            item = next((item for item in result.get("items", []) if item.get("id") == decision_id), None)
+            if not item:
+                return None
+            history = item.setdefault("reviewHistory", [])
+            history.append({"actorId": actor_id, "at": now,
+                            "from": item.get("reviewStatus", "needs_review"), "to": review_status})
+            item["reviewStatus"] = review_status
+            item["reviewedBy"] = actor_id
+            item["reviewedAt"] = now
+            db.execute("UPDATE decision_results SET result_json=?,created_at=? WHERE job_id=?",
+                       (json.dumps(result, ensure_ascii=False, separators=(",", ":")), now, row["job_id"]))
+            db.execute("UPDATE artifacts SET status='superseded' WHERE meeting_id=? AND organization_id=? AND status='ready'",
+                       (meeting_id, organization_id))
+            return result

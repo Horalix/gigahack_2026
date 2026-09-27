@@ -12,6 +12,8 @@ def render_minutes_html(meeting: dict, segments: list[dict], decisions: dict,
     """Render only an explicitly approved snapshot; escape every source string."""
     actions = []
     for item in decisions.get("items", []):
+        if item.get("reviewStatus", "accepted") != "accepted":
+            continue
         quotes = "".join(
             f'<blockquote><time>{_e(round(e.get("startMs", 0) / 1000))}s</time> “{_e(e.get("quote", ""))}”</blockquote>'
             for e in item.get("taskEvidence", [])

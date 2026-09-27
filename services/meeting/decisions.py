@@ -251,7 +251,7 @@ def _validate_final(raw: dict, events: list[dict], segments: list[dict], meeting
             "id": hashlib.sha256(f"{job['id']}:{index}:{stable}".encode()).hexdigest()[:32],
             "organizationId": job["organization_id"], "meetingId": job["meeting_id"],
             "revision": segments[0]["transcript_revision"] if segments else 0,
-            "kind": kind, "text": text, "status": status,
+            "kind": kind, "text": text, "status": status, "reviewStatus": "needs_review",
             "ownerParticipantId": None, "ownerLabel": owner, "dueAt": None,
             "originalDateExpression": date, "taskEvidence": task_evidence,
             "ownerEvidence": owner_evidence, "dateEvidence": date_evidence,

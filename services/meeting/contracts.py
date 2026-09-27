@@ -119,6 +119,13 @@ class FinalizeArtifact(BaseModel):
     confirmHumanReview: bool
 
 
+class ReviewDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transcriptRevision: int = Field(ge=0)
+    reviewStatus: Literal["accepted", "excluded"]
+
+
 class CreateCapture(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
