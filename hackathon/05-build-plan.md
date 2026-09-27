@@ -24,7 +24,7 @@ All are P0, including user-added patient search, live mode and manual correction
 - Manual edits preserve raw source and rebuild dependent output; stale files cannot remain ready.
 - A prepared offline cold start processes new input. Models and frontend assets are local.
 - A genuine one-hour upload reaches observed email receipt in <=900 seconds with Affan. File-ready alone does not prove this gate. Report live lag and Stop-to-receipt separately.
-- The last integrated local ASR+LLM stage-sum projected to 20.0 minutes/hour at the then-current profile. A separate batch-2 ASR probe plus the earlier LLM stage projects to 12.2 minutes/hour, but the app has not been retimed end to end with batch 2. A complete hour and end-to-end receipt are not measured, so the target stays OPEN.
+- The current laptop8 batch-2 app took 123.04s upload-to-ready on 702.635s of audio, a linear 10.5 minutes/hour projection. A full hour and end-to-end receipt are still unmeasured, so the target stays OPEN.
 - Report actual hardware, model hashes, stage times, memory, language/critical-term errors and action correctness. Separate raw, machine-only and reviewed results.
 - Keep real sensitive data outside Git/OneDrive. Demonstrate with permitted/synthetic material; real patient use needs PBI-022.
 
