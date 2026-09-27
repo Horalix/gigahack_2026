@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from "svelte";
 
   type User = { id: string; username: string; role: string };
-  type Meeting = { id: string; title: string; recordedAt: string; status: string; outputLanguage: string; transcriptRevision: number };
+  type Meeting = { id: string; title: string; recordedAt: string; status: string; outputLanguage: string; transcriptRevision: number; legalHold?: boolean };
   type Segment = { id: string; startMs: number; endMs: number; text: string; language: string };
   type Patient = { id: string; displayName: string; hospitalReference: string | null; status: string; meetings?: { id: string; title: string; recordedAt: string; status: string }[] };
   type Capture = { id: string; state: string; next_sequence: number; received_bytes: number; error_code?: string | null };
@@ -268,6 +268,18 @@
         current: active.some((range) => range.current), flagged: active.some((range) => range.flagged) });
     }
     return parts;
+  }
+
+  async function toggleLegalHold() {
+    if (!detail || user?.role !== "administrator") return;
+    const active = !detail.meeting.legalHold;
+    if (!active && !window.confirm("Release this meeting's legal hold? Configured retention expiry can then remove eligible data.")) return;
+    const meetingId = detail.meeting.id;
+    try {
+      await request(`/meetings/${meetingId}/legal-hold`, { method: "PUT", body: JSON.stringify({ active }) });
+      await openMeeting(meetingId);
+      status = active ? "Legal hold placed. Deletion and automatic expiry are blocked." : "Legal hold released. Configured retention expiry may apply.";
+    } catch (e) { showError(e); }
   }
 
   async function loadDeletionAudit() {
@@ -835,7 +847,7 @@
       </aside>
       <section class="content">
         {#if detail}
-          <div class="panel-head"><div><p class="eyebrow">{new Date(detail.meeting.recordedAt).toLocaleString()}</p><h1>{detail.meeting.title}</h1></div><div class="downloads"><button class="quiet" onclick={() => (detail = null)}>← Meetings</button>{#if detail.permission === "owner"}<button class="quiet" onclick={deleteMeeting}>Delete local meeting data</button>{/if}</div></div>
+          <div class="panel-head"><div><p class="eyebrow">{new Date(detail.meeting.recordedAt).toLocaleString()}</p><h1>{detail.meeting.title}</h1>{#if detail.meeting.legalHold}<span class="warning">Legal hold active</span>{/if}</div><div class="downloads"><button class="quiet" onclick={() => (detail = null)}>← Meetings</button>{#if user.role === "administrator"}<button class="quiet" onclick={toggleLegalHold}>{detail.meeting.legalHold ? "Release legal hold" : "Place legal hold"}</button>{/if}{#if detail.permission === "owner" && !detail.meeting.legalHold}<button class="quiet" onclick={deleteMeeting}>Delete local meeting data</button>{/if}</div></div>
           {#if detail.asset}<p class="muted">Audio length: {(detail.asset.durationMs / 60000).toFixed(1)} min {#if detail.asset.decodeWarning}<span class="warning">· Audio decode warning</span>{/if}{#if detail.asset.audioAvailable === false}<span class="warning">· Audio expired under the local retention policy; upload it again to replay or reprocess.</span>{/if}</p>{/if}
           {#each detail.captures as capture (capture.id)}<section class="panel"><h2>Unfinished microphone capture</h2><p>Only acknowledged chunks were saved ({(capture.received_bytes / 1048576).toFixed(1)} MB). The last part of speech may be missing. Process the saved portion or discard it.</p><div class="downloads"><button class="primary" disabled={busy || !capture.next_sequence} onclick={() => processSavedCapture(capture)}>Process saved portion</button><button class="quiet" disabled={busy} onclick={() => discardSavedCapture(capture)}>Discard saved chunks</button></div></section>{/each}
           <section class="panel"><h2>Add recording</h2><p>Upload audio or video, or record through the microphone. Live words are provisional; after Stop, local ASR fills skipped windows from the saved recording.</p><div class="live-record"><button class:recording class="quiet" type="button" onclick={() => recording ? stopRecording() : startRecording()} disabled={busy}>{recording ? "Stop recording" : "● Record live"}</button>{#if recording}<span class="record-indicator"><i></i> Recording · {formatElapsed(recordingSeconds)}<label class="record-health">Microphone level <meter min="0" max="1" value={microphoneLevel}></meter></label><small>{acknowledgedCaptureChunks} {acknowledgedCaptureChunks === 1 ? "chunk" : "chunks"} saved · {pendingChunkUploads} pending</small></span>{/if}</div>{#if livePreviewStatus}<p role="status" class="status">{livePreviewStatus}</p>{/if}{#if liveSegments.length}<section class="panel live-transcript"><h3>Live transcript <span>Provisional</span></h3><div class="transcript">{#each liveSegments as segment (segment.id)}<p><time>{formatTime(segment.startMs)}</time><span>{segment.text}</span><small>{segment.language}</small></p>{/each}</div></section>{/if}<form class="upload-form" onsubmit={upload}>

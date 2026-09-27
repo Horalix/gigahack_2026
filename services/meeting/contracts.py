@@ -146,6 +146,12 @@ class RetentionPolicyUpdate(BaseModel):
     voiceTemplateDays: int | None = Field(ge=1, le=3650)
 
 
+class SetLegalHold(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    active: bool
+
+
 class CreateCapture(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

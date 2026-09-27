@@ -15,7 +15,7 @@ from typing import Iterator
 
 LEASE_SECONDS = 30
 MAX_CAPTURE_BYTES = 2 * 1024 * 1024 * 1024
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 def default_data_root() -> Path:
@@ -239,6 +239,11 @@ class Storage:
                     SELECT 1,organization_id,NULL,NULL,NULL,NULL,? FROM installation WHERE singleton=1""",
                     (timestamp(),))
                 db.execute("PRAGMA user_version=13")
+            if current < 14:
+                db.execute("ALTER TABLE meetings ADD COLUMN legal_hold INTEGER NOT NULL DEFAULT 0 CHECK(legal_hold IN (0,1))")
+                db.execute("ALTER TABLE meetings ADD COLUMN legal_hold_set_by TEXT REFERENCES users(id)")
+                db.execute("ALTER TABLE meetings ADD COLUMN legal_hold_set_at TEXT")
+                db.execute("PRAGMA user_version=14")
 
     def asset_path(self, meeting_id: str, asset_id: str, suffix: str) -> Path:
         # IDs are generated locally; never put an uploaded name into a filesystem path.
@@ -372,12 +377,14 @@ class Storage:
     def purge_meeting(self, meeting_id: str, organization_id: str, actor_id: str) -> int | None:
         """Revoke a meeting and all app-managed derivatives; return cleanup queue size."""
         with self.transaction() as db:
-            meeting = db.execute("""SELECT m.id,m.transcript_revision,g.permission FROM meetings m JOIN meeting_grants g
+            meeting = db.execute("""SELECT m.id,m.transcript_revision,m.legal_hold,g.permission FROM meetings m JOIN meeting_grants g
                 ON g.meeting_id=m.id AND g.organization_id=m.organization_id
                 WHERE m.id=? AND m.organization_id=? AND g.user_id=?""",
                 (meeting_id, organization_id, actor_id)).fetchone()
             if not meeting or meeting["permission"] != "owner":
                 return None
+            if meeting["legal_hold"]:
+                raise RuntimeError("MEETING_LEGAL_HOLD")
             db.execute("UPDATE jobs SET state='cancelled',stage='cancelled',lease_owner=NULL,lease_until=NULL,updated_at=? WHERE meeting_id=? AND state='queued'",
                        (timestamp(), meeting_id))
             active = db.execute("SELECT 1 FROM jobs WHERE meeting_id=? AND state='running' LIMIT 1",
@@ -466,6 +473,27 @@ class Storage:
             row = db.execute("SELECT * FROM retention_policy WHERE singleton=1 AND organization_id=?",
                              (organization_id,)).fetchone()
             return dict(row) if row else None
+
+    def set_meeting_legal_hold(self, meeting_id: str, organization_id: str,
+                               actor_id: str, active: bool) -> dict | None:
+        now = timestamp()
+        with self.transaction() as db:
+            meeting = db.execute("SELECT legal_hold,transcript_revision FROM meetings WHERE id=? AND organization_id=?",
+                                 (meeting_id, organization_id)).fetchone()
+            if not meeting:
+                return None
+            if bool(meeting["legal_hold"]) == active:
+                return {"active": active, "setBy": None, "setAt": None}
+            db.execute("UPDATE meetings SET legal_hold=?,legal_hold_set_by=?,legal_hold_set_at=?,updated_at=? WHERE id=?",
+                       (int(active), actor_id if active else None, now if active else None, now, meeting_id))
+            db.execute("""INSERT INTO deletion_audit
+                (id,organization_id,actor_id,subject_type,subject_id,action,created_at,transcript_revision)
+                VALUES(?,?,?,?,?,?,?,?)""",
+                (str(uuid.uuid4()), organization_id, actor_id, "meeting",
+                 meeting_id, "legal_hold_set" if active else "legal_hold_released", now,
+                 meeting["transcript_revision"]))
+            return {"active": active, "setBy": actor_id if active else None,
+                    "setAt": now if active else None}
 
     def update_retention_policy(self, organization_id: str, actor_id: str, policy: dict) -> dict | None:
         with self.transaction() as db:

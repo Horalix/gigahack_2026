@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .auth import AuthService, SESSION_COOKIE, SESSION_SECONDS
-from .contracts import CreateAccount, CreateCapture, CreateJob, CreateMeeting, CreatePatient, ErrorEnvelope, FinalizeArtifact, GrantMeetingAccess, LoginRequest, RetentionPolicyUpdate, ReviewDecision, ReviewTranscriptIssue, ReviseSegment, ReviseSegments, SealCapture, SetAccountActive, SetupRequest, UndoTranscriptRevision, UpdatePatient
+from .contracts import CreateAccount, CreateCapture, CreateJob, CreateMeeting, CreatePatient, ErrorEnvelope, FinalizeArtifact, GrantMeetingAccess, LoginRequest, RetentionPolicyUpdate, ReviewDecision, ReviewTranscriptIssue, ReviseSegment, ReviseSegments, SealCapture, SetAccountActive, SetLegalHold, SetupRequest, UndoTranscriptRevision, UpdatePatient
 from .capture import CaptureError, seal_capture
 from .inference_lock import InferenceBusy, inference_device_lock
 from .media import MAX_UPLOAD_BYTES, MediaError, decode
@@ -48,6 +48,7 @@ def meeting_record(row: dict, patient_link_ids: list[str] | None = None) -> dict
             "meetingType": row["meeting_type"], "suggestedMeetingType": None,
             "outputLanguage": row["output_language"], "patientLinkIds": patient_link_ids or [], "participantIds": [],
             "status": row["status"], "transcriptRevision": row["transcript_revision"],
+            "legalHold": bool(row.get("legal_hold", 0)),
             "createdAt": row["created_at"], "updatedAt": row["updated_at"]}
 
 
@@ -397,10 +398,20 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         except RuntimeError as exc:
             if str(exc) == "MEETING_PROCESSING":
                 raise ServiceError(409, "MEETING_PROCESSING", "Stop or wait for active processing before deleting this meeting") from exc
+            if str(exc) == "MEETING_LEGAL_HOLD":
+                raise ServiceError(423, "MEETING_LEGAL_HOLD", "This meeting is on legal hold and cannot be deleted") from exc
             raise
         if pending_files is None:
             raise ServiceError(404, "MEETING_NOT_FOUND", "Meeting not found")
         return {"ok": True, "pendingFileCleanup": pending_files}
+
+    @app.put("/api/meetings/{meeting_id}/legal-hold")
+    def set_meeting_legal_hold(meeting_id: str, data: SetLegalHold,
+                                actor: dict = Depends(administrator), db: Storage = Depends(store)):
+        result = db.set_meeting_legal_hold(meeting_id, actor["organization_id"], actor["id"], data.active)
+        if result is None:
+            raise ServiceError(404, "MEETING_NOT_FOUND", "Meeting not found")
+        return {"meetingId": meeting_id, **result}
 
     @app.put("/api/meetings/{meeting_id}/decisions/{decision_id}")
     def review_decision(meeting_id: str, decision_id: str, data: ReviewDecision,

@@ -24,7 +24,7 @@ def apply_expirations(store: Storage) -> int:
         if audio_days is not None:
             rows = db.execute("""SELECT a.id,a.meeting_id,a.source_key,a.decoded_key,m.transcript_revision
                 FROM assets a JOIN meetings m ON m.id=a.meeting_id
-                WHERE a.organization_id=? AND a.source_purged_at IS NULL AND a.created_at<=?
+                WHERE a.organization_id=? AND m.legal_hold=0 AND a.source_purged_at IS NULL AND a.created_at<=?
                   AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.asset_id=a.id AND j.state='running')""",
                 (organization_id, _cutoff(audio_days))).fetchall()
             for asset in rows:
@@ -50,7 +50,7 @@ def apply_expirations(store: Storage) -> int:
         if transcript_days is not None:
             rows = db.execute("""SELECT m.id,m.transcript_revision,MIN(s.created_at) AS first_transcript_at
                 FROM meetings m JOIN segments s ON s.meeting_id=m.id AND s.organization_id=m.organization_id
-                WHERE m.organization_id=? AND m.transcript_purged_at IS NULL
+                WHERE m.organization_id=? AND m.legal_hold=0 AND m.transcript_purged_at IS NULL
                   AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.meeting_id=m.id AND j.state='running')
                 GROUP BY m.id HAVING first_transcript_at<=?""",
                 (organization_id, _cutoff(transcript_days))).fetchall()
@@ -85,8 +85,9 @@ def apply_expirations(store: Storage) -> int:
 
         artifact_days = policy["artifact_days"]
         if artifact_days is not None:
-            rows = db.execute("""SELECT id,meeting_id,storage_key,transcript_revision FROM artifacts
-                WHERE organization_id=? AND approved_at<=?""",
+            rows = db.execute("""SELECT a.id,a.meeting_id,a.storage_key,a.transcript_revision FROM artifacts a
+                JOIN meetings m ON m.id=a.meeting_id WHERE a.organization_id=? AND m.legal_hold=0
+                  AND a.approved_at<=?""",
                 (organization_id, _cutoff(artifact_days))).fetchall()
             for artifact in rows:
                 db.execute("DELETE FROM artifacts WHERE id=?", (artifact["id"],))
