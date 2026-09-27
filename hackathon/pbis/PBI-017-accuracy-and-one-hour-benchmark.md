@@ -30,7 +30,9 @@ Create `evaluation/benchmark.py`, `evaluation/README.md`, small synthetic gold f
 
 ## Acceptance
 
-- Actual results and limitations exist; required laptop hour target either passes with evidence or remains openly failed. No extrapolated 16 GB or clinical-accuracy claims.
+- For current development, the user's accepted hour-run gate is that a 3,600-second job completes without OOM or interruption. The repeated-audio soak passes this duration/memory gate; it is not genuine-meeting quality evidence.
+- The competition's <=15-minute target is separately unqualified. The user has asked for no further speed testing; it does not block the current app completion gate. Do not claim the target is met.
+- Language and clinical accuracy remain open pending a human-verified reference. No extrapolated 16 GB or clinical-accuracy claims.
 
 ## Targeted validation
 

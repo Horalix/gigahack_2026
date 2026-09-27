@@ -16,12 +16,13 @@
 - [x] `scripts/hackathon/preflight.ps1 -ProfileId laptop8`: passed on this RTX 3070 Ti laptop.
 - [x] One real 20-second Romanian sample window passed through local preview API on the 3070 Ti in 14.42s including request/model setup; temporary audio was removed and VRAM returned to 0 MiB.
 - [x] Laptop8 completed a 3,600-second input soak from repeated authorized challenge audio: app reached `ready` with 143 segments and 9 decision items in 1,143.79s; minimum available RAM 2.63 GiB; peak device-wide GPU use 4,831 MiB. This shows no OOM/interruption on the repeated-audio soak, not a genuine one-hour meeting or semantic accuracy.
+- [x] Current user acceptance for hour-length processing: the repeated-audio 3,600-second job completed without OOM or interruption.
 - [x] `scripts/windows-build.ps1 -Task package` produced the Notavra MSI and NSIS installers on Windows.
 - [x] Packaged UI/API origin test serves the generated page and authenticates with the same-origin strict session cookie; the Tauri release configuration builds successfully.
 
 ## Must remain disclosed as open
 
-- [ ] Competition target: full one-hour upload-to-approved-file timing at or below 15 minutes. The user accepts hour-length completion without OOM/interruption for current development; the repeated-audio soak completed in 19m04s and does not qualify this speed target or a genuine one-hour recording.
+- [ ] Competition target: full one-hour upload-to-approved-file timing at or below 15 minutes remains unqualified. The user has asked for no further speed testing, and this does not block the current hour-length completion gate.
 - [ ] RTX 5080 / 16 GB host test. `hospital16` batch 4 and CUDA 13 are configured but not physically verified here.
 - [ ] WAN-disconnected launch and external-egress observation on the final demo build.
 - [ ] Physical microphone recording, permission-loss and user-visible preview-lag behavior on the demo device. Mocked UI plus one real sample-window API test pass, but no ambient/microphone run has been performed.
