@@ -99,6 +99,18 @@ class FinalizeArtifact(BaseModel):
     confirmHumanReview: bool
 
 
+class CreateCapture(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contentType: Literal["audio/webm", "audio/webm;codecs=opus", "audio/mp4", "audio/wav"]
+
+
+class SealCapture(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expectedSequenceCount: int = Field(ge=1, le=2160)
+
+
 class ErrorEnvelope(BaseModel):
     code: str
     message: str

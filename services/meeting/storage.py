@@ -14,7 +14,8 @@ from typing import Iterator
 
 
 LEASE_SECONDS = 30
-SCHEMA_VERSION = 8
+MAX_CAPTURE_BYTES = 2 * 1024 * 1024 * 1024
+SCHEMA_VERSION = 9
 
 
 def default_data_root() -> Path:
@@ -181,6 +182,23 @@ class Storage:
                 )""")
                 db.execute("CREATE INDEX artifacts_meeting_revision ON artifacts(meeting_id,transcript_revision,created_at)")
                 db.execute("PRAGMA user_version=8")
+            if current < 9:
+                db.execute("""CREATE TABLE capture_sessions (
+                    id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
+                    meeting_id TEXT NOT NULL REFERENCES meetings(id), asset_id TEXT NOT NULL UNIQUE,
+                    created_by TEXT NOT NULL REFERENCES users(id), content_type TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('capturing','sealing','sealed','failed')),
+                    next_sequence INTEGER NOT NULL DEFAULT 0, received_bytes INTEGER NOT NULL DEFAULT 0,
+                    error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                )""")
+                db.execute("CREATE INDEX capture_sessions_meeting ON capture_sessions(organization_id,meeting_id,created_at)")
+                db.execute("""CREATE TABLE capture_chunks (
+                    session_id TEXT NOT NULL REFERENCES capture_sessions(id) ON DELETE CASCADE,
+                    sequence INTEGER NOT NULL, storage_key TEXT NOT NULL UNIQUE,
+                    size_bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, created_at TEXT NOT NULL,
+                    PRIMARY KEY(session_id,sequence)
+                )""")
+                db.execute("PRAGMA user_version=9")
 
     def asset_path(self, meeting_id: str, asset_id: str, suffix: str) -> Path:
         # IDs are generated locally; never put an uploaded name into a filesystem path.
@@ -461,6 +479,192 @@ class Storage:
                  VALUES (:id,:organization_id,:meeting_id,:source_key,:source_sha256,:decoded_key,
                  :duration_ms,:source_offset_ms,:size_bytes,:media_type,:audio_track_index,
                  :channels,:sample_rate_hz,:created_at,:kind,:decode_warning)""", row)
+        return row
+
+    def create_capture_session(self, meeting_id: str, organization_id: str, actor_id: str,
+                               content_type: str) -> dict:
+        if content_type not in {"audio/webm", "audio/webm;codecs=opus", "audio/mp4", "audio/wav"}:
+            raise ValueError("Unsupported microphone recording format")
+        now, session_id, asset_id = timestamp(), str(uuid.uuid4()), str(uuid.uuid4())
+        row = {"id": session_id, "organization_id": organization_id, "meeting_id": meeting_id,
+               "asset_id": asset_id, "created_by": actor_id, "content_type": content_type,
+               "state": "capturing", "next_sequence": 0, "received_bytes": 0,
+               "error_code": None, "created_at": now, "updated_at": now}
+        with self.transaction() as db:
+            db.execute("""INSERT INTO capture_sessions
+                (id,organization_id,meeting_id,asset_id,created_by,content_type,state,next_sequence,received_bytes,error_code,created_at,updated_at)
+                VALUES(:id,:organization_id,:meeting_id,:asset_id,:created_by,:content_type,:state,:next_sequence,:received_bytes,:error_code,:created_at,:updated_at)""", row)
+        return row
+
+    def get_capture_session(self, session_id: str, organization_id: str) -> dict | None:
+        with closing(self.connect()) as db:
+            row = db.execute("SELECT * FROM capture_sessions WHERE id=? AND organization_id=?",
+                             (session_id, organization_id)).fetchone()
+            if not row:
+                return None
+            result = dict(row)
+            chunks = db.execute("SELECT * FROM capture_chunks WHERE session_id=? ORDER BY sequence",
+                                (session_id,)).fetchall()
+            result["chunks"] = [dict(chunk) for chunk in chunks]
+            return result
+
+    def list_open_captures(self, meeting_id: str, organization_id: str) -> list[dict]:
+        with closing(self.connect()) as db:
+            rows = db.execute("""SELECT id,state,next_sequence,received_bytes,error_code,created_at
+                FROM capture_sessions WHERE meeting_id=? AND organization_id=? AND state!='sealed'
+                ORDER BY created_at,id""", (meeting_id, organization_id)).fetchall()
+            return [dict(row) for row in rows]
+
+    def delete_capture(self, session_id: str, organization_id: str, actor_id: str) -> bool:
+        with self.transaction() as db:
+            session = db.execute("""SELECT c.state,g.permission FROM capture_sessions c JOIN meeting_grants g
+                ON g.meeting_id=c.meeting_id AND g.organization_id=c.organization_id
+                WHERE c.id=? AND c.organization_id=? AND g.user_id=?""",
+                (session_id, organization_id, actor_id)).fetchone()
+            if not session or session["permission"] not in {"owner", "editor"} or session["state"] == "sealed":
+                return False
+            chunks = db.execute("SELECT storage_key FROM capture_chunks WHERE session_id=?", (session_id,)).fetchall()
+            db.execute("DELETE FROM capture_sessions WHERE id=?", (session_id,))
+        for chunk in chunks:
+            self.resolve_key(chunk["storage_key"]).unlink(missing_ok=True)
+        directory = (self.root / "captures" / session_id).resolve()
+        if directory.is_relative_to(self.root):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+        return True
+
+    def capture_chunk_path(self, session_id: str, sequence: int) -> Path:
+        directory = (self.root / "captures" / session_id).resolve()
+        if not directory.is_relative_to(self.root):
+            raise ValueError("Capture path escapes data directory")
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory / f"{sequence:06d}.chunk"
+
+    def store_capture_chunk(self, session_id: str, organization_id: str, actor_id: str,
+                            sequence: int, content: bytes) -> dict:
+        if not content or len(content) > 32 * 1024 * 1024:
+            raise ValueError("Capture chunk must be between 1 byte and 32 MiB")
+        digest = hashlib.sha256(content).hexdigest()
+        destination = self.capture_chunk_path(session_id, sequence)
+        temporary = None
+        moved = False
+        try:
+            with tempfile.NamedTemporaryFile(mode="wb", dir=destination.parent, prefix=".chunk-", suffix=".tmp", delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            with self.transaction() as db:
+                session = db.execute("""SELECT c.*,g.permission FROM capture_sessions c JOIN meeting_grants g
+                    ON g.meeting_id=c.meeting_id AND g.organization_id=c.organization_id
+                    WHERE c.id=? AND c.organization_id=? AND g.user_id=?""",
+                    (session_id, organization_id, actor_id)).fetchone()
+                if not session or session["permission"] not in {"owner", "editor"}:
+                    raise LookupError("Capture not found")
+                previous = db.execute("SELECT sha256,size_bytes FROM capture_chunks WHERE session_id=? AND sequence=?",
+                                      (session_id, sequence)).fetchone()
+                if sequence < session["next_sequence"]:
+                    if previous and previous["sha256"] == digest and previous["size_bytes"] == len(content):
+                        return {"idempotent": True, "nextSequence": session["next_sequence"],
+                                "receivedBytes": session["received_bytes"]}
+                    raise ValueError("Capture sequence was already stored with different bytes")
+                if session["state"] != "capturing":
+                    raise ValueError("Capture session is not accepting chunks")
+                if sequence != session["next_sequence"]:
+                    raise ValueError("Capture chunks must arrive in sequence")
+                if session["received_bytes"] + len(content) > MAX_CAPTURE_BYTES:
+                    raise OverflowError("Capture exceeds the 2 GiB limit")
+                os.replace(temporary, destination)
+                temporary = None
+                moved = True
+                db.execute("""INSERT INTO capture_chunks(session_id,sequence,storage_key,size_bytes,sha256,created_at)
+                    VALUES(?,?,?,?,?,?)""", (session_id, sequence, self.relative_key(destination), len(content), digest, timestamp()))
+                received = session["received_bytes"] + len(content)
+                next_sequence = sequence + 1
+                db.execute("UPDATE capture_sessions SET next_sequence=?,received_bytes=?,updated_at=? WHERE id=?",
+                           (next_sequence, received, timestamp(), session_id))
+            return {"idempotent": False, "nextSequence": next_sequence, "receivedBytes": received}
+        finally:
+            if temporary:
+                temporary.unlink(missing_ok=True)
+            if moved:
+                with closing(self.connect()) as db:
+                    stored = db.execute("SELECT 1 FROM capture_chunks WHERE session_id=? AND sequence=?",
+                                        (session_id, sequence)).fetchone()
+                if not stored:
+                    destination.unlink(missing_ok=True)
+
+    def begin_capture_seal(self, session_id: str, organization_id: str, actor_id: str,
+                           expected_sequence_count: int) -> dict:
+        with self.transaction() as db:
+            row = db.execute("""SELECT c.*,g.permission FROM capture_sessions c JOIN meeting_grants g
+                ON g.meeting_id=c.meeting_id AND g.organization_id=c.organization_id
+                WHERE c.id=? AND c.organization_id=? AND g.user_id=?""",
+                (session_id, organization_id, actor_id)).fetchone()
+            if not row or row["permission"] not in {"owner", "editor"}:
+                raise LookupError("Capture not found")
+            if row["state"] == "sealed":
+                asset = db.execute("SELECT * FROM assets WHERE id=? AND organization_id=?",
+                                   (row["asset_id"], organization_id)).fetchone()
+                return {"state": "sealed", "asset": dict(asset) if asset else None}
+            if expected_sequence_count < 1 or expected_sequence_count != row["next_sequence"]:
+                raise ValueError("Capture is incomplete; one or more chunks are missing")
+            chunks = db.execute("SELECT * FROM capture_chunks WHERE session_id=? ORDER BY sequence",
+                                (session_id,)).fetchall()
+            if len(chunks) != expected_sequence_count or any(chunk["sequence"] != index for index, chunk in enumerate(chunks)):
+                raise ValueError("Capture chunk sequence is incomplete")
+            db.execute("UPDATE capture_sessions SET state='sealing',error_code=NULL,updated_at=? WHERE id=?",
+                       (timestamp(), session_id))
+            result = dict(row)
+            result["chunks"] = [dict(chunk) for chunk in chunks]
+            return result
+
+    def fail_capture(self, session_id: str, error_code: str) -> None:
+        with self.transaction() as db:
+            db.execute("UPDATE capture_sessions SET state='failed',error_code=?,updated_at=? WHERE id=? AND state!='sealed'",
+                       (error_code, timestamp(), session_id))
+
+    def complete_capture(self, session_id: str, organization_id: str, actor_id: str, details: dict) -> dict:
+        session = self.get_capture_session(session_id, organization_id)
+        if not session:
+            raise LookupError("Capture not found")
+        destination_keys = [chunk["storage_key"] for chunk in session["chunks"]]
+        row = {"id": session["asset_id"], "organization_id": organization_id, "meeting_id": session["meeting_id"],
+               "source_key": details["source_key"], "source_sha256": details["source_sha256"],
+               "decoded_key": details["decoded_key"], "duration_ms": details["duration_ms"],
+               "source_offset_ms": details["source_offset_ms"], "size_bytes": details["size_bytes"],
+               "media_type": details["media_type"], "audio_track_index": details["audio_track_index"],
+               "channels": details.get("channels"), "sample_rate_hz": details.get("sample_rate_hz"),
+               "created_at": timestamp(), "kind": "audio", "decode_warning": details.get("decode_warning")}
+        with self.transaction() as db:
+            current = db.execute("""SELECT c.state,g.permission FROM capture_sessions c JOIN meeting_grants g
+                ON g.meeting_id=c.meeting_id AND g.organization_id=c.organization_id
+                WHERE c.id=? AND c.organization_id=? AND g.user_id=?""",
+                (session_id, organization_id, actor_id)).fetchone()
+            if not current or current["permission"] not in {"owner", "editor"}:
+                raise LookupError("Capture not found")
+            if current["state"] == "sealed":
+                asset = db.execute("SELECT * FROM assets WHERE id=?", (session["asset_id"],)).fetchone()
+                return dict(asset)
+            if current["state"] != "sealing":
+                raise ValueError("Capture is not ready to seal")
+            db.execute("""INSERT INTO assets
+                (id,organization_id,meeting_id,source_key,source_sha256,decoded_key,duration_ms,
+                 source_offset_ms,size_bytes,media_type,audio_track_index,channels,sample_rate_hz,created_at,kind,decode_warning)
+                VALUES (:id,:organization_id,:meeting_id,:source_key,:source_sha256,:decoded_key,
+                 :duration_ms,:source_offset_ms,:size_bytes,:media_type,:audio_track_index,
+                 :channels,:sample_rate_hz,:created_at,:kind,:decode_warning)""", row)
+            db.execute("UPDATE capture_sessions SET state='sealed',asset_id=?,error_code=NULL,updated_at=? WHERE id=?",
+                       (row["id"], timestamp(), session_id))
+            db.execute("DELETE FROM capture_chunks WHERE session_id=?", (session_id,))
+        for key in destination_keys:
+            self.resolve_key(key).unlink(missing_ok=True)
+        try:
+            self.capture_chunk_path(session_id, 0).parent.rmdir()
+        except OSError:
+            pass
         return row
 
     def latest_asset(self, meeting_id: str, organization_id: str) -> dict | None:

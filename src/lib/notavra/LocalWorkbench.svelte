@@ -5,8 +5,9 @@
   type Meeting = { id: string; title: string; recordedAt: string; status: string; outputLanguage: string; transcriptRevision: number };
   type Segment = { id: string; startMs: number; endMs: number; text: string; language: string };
   type Patient = { id: string; displayName: string; hospitalReference: string | null; status: string; meetings?: { id: string; title: string; recordedAt: string; status: string }[] };
+  type Capture = { id: string; state: string; next_sequence: number; received_bytes: number; error_code?: string | null };
   type Profile = { id: string; hardware: { gpu: string; vram_gb: number }; asrFilesPresent: boolean; llmFilePresent: boolean; compatible: boolean };
-  type Detail = { meeting: Meeting; asset: { durationMs: number; decodeWarning?: string } | null; segments: Segment[]; decisions: any; artifact: { id: string; sha256: string; approvedAt: string; storageKey: string } | null };
+  type Detail = { meeting: Meeting; asset: { durationMs: number; decodeWarning?: string } | null; segments: Segment[]; decisions: any; captures: Capture[]; artifact: { id: string; sha256: string; approvedAt: string; storageKey: string } | null };
 
   let user = $state<User | null>(null);
   let setupRequired = $state(false);
@@ -33,10 +34,14 @@
   let status = $state("");
   let recording = $state(false);
   let recordingSeconds = $state(0);
-  let recordedFile = $state<File | null>(null);
+  let captureId: string | undefined;
+  let nextCaptureSequence = 0;
+  let chunkUpload: Promise<void> = Promise.resolve();
+  let pendingChunkUploads = 0;
+  let captureFailure = "";
+  let captureWarning = "";
   let recorder: MediaRecorder | undefined;
   let mediaStream: MediaStream | undefined;
-  let recordedParts: Blob[] = [];
   let recordingTimer: ReturnType<typeof setInterval> | undefined;
   let editingSegment = $state<string | null>(null);
   let editText = $state("");
@@ -184,7 +189,7 @@
     event.preventDefault();
     if (!detail) return;
     const form = new FormData(event.currentTarget as HTMLFormElement);
-    const file = recordedFile ?? form.get("audio");
+    const file = form.get("audio");
     if (!(file instanceof File) || !file.size) { error = "Choose an audio or video file first."; return; }
     busy = true; error = ""; status = "Uploading and preparing audio…";
     try {
@@ -195,7 +200,6 @@
         method: "POST", body: JSON.stringify({ profileId, language }),
       });
       void asset;
-      recordedFile = null;
       watchJob(job.id);
     } catch (e) { error = e instanceof Error ? e.message : "Processing could not start"; status = ""; busy = false; }
   }
@@ -212,30 +216,89 @@
   }
 
   async function startRecording() {
-    error = ""; recordedFile = null; recordedParts = []; recordingSeconds = 0;
+    if (!detail) return;
+    error = ""; captureFailure = ""; captureWarning = ""; nextCaptureSequence = 0; pendingChunkUploads = 0; chunkUpload = Promise.resolve(); recordingSeconds = 0;
     try {
       mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = ["audio/webm;codecs=opus", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
-      recorder = mimeType ? new MediaRecorder(mediaStream, { mimeType }) : new MediaRecorder(mediaStream);
+      const requestedMime = ["audio/webm;codecs=opus", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
+      recorder = requestedMime ? new MediaRecorder(mediaStream, { mimeType: requestedMime }) : new MediaRecorder(mediaStream);
+      const mimeType = recorder.mimeType || requestedMime || "audio/webm";
+      const session = await request<{ id: string }>(`/meetings/${detail.meeting.id}/captures`, {
+        method: "POST", body: JSON.stringify({ contentType: mimeType }),
+      });
+      captureId = session.id;
       recorder.ondataavailable = (event) => {
         if (!event.data.size) return;
-        recordedParts.push(event.data);
-        if (recordedParts.reduce((total, part) => total + part.size, 0) >= 1_800_000_000) {
-          error = "Recording reached the local upload limit. Stop and process this recording now.";
+        const sequence = nextCaptureSequence++;
+        const sessionId = captureId;
+        pendingChunkUploads += 1;
+        if (pendingChunkUploads >= 4 && recording) {
+          captureWarning = "Recording stopped because local storage could not keep pace; the captured portion is being saved.";
           stopRecording();
         }
+        chunkUpload = chunkUpload.then(async () => {
+          if (captureFailure || !sessionId) return;
+          const response = await fetch(`/api/captures/${sessionId}/chunks/${sequence}`, {
+            method: "PUT", body: event.data, credentials: "same-origin", headers: { "Content-Type": mimeType },
+          });
+          const body = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(body.message || "A recording chunk could not be saved");
+        }).catch((e) => { captureFailure = e instanceof Error ? e.message : "Chunk upload failed"; error = captureFailure; })
+          .finally(() => pendingChunkUploads = Math.max(0, pendingChunkUploads - 1));
       };
       recorder.onstop = () => {
-        const blob = new Blob(recordedParts, { type: recorder?.mimeType || "audio/webm" });
-        if (blob.size) recordedFile = new File([blob], `notavra-recording-${Date.now()}.webm`, { type: blob.type });
-        else error = "The microphone recording was empty.";
         mediaStream?.getTracks().forEach((track) => track.stop());
         mediaStream = undefined;
+        void finishRecording();
       };
       recorder.start(10_000);
       recording = true;
       recordingTimer = setInterval(() => recordingSeconds += 1, 1000);
-    } catch (e) { error = e instanceof Error ? e.message : "Microphone access failed"; mediaStream?.getTracks().forEach((track) => track.stop()); }
+    } catch (e) { error = e instanceof Error ? e.message : "Microphone access failed"; mediaStream?.getTracks().forEach((track) => track.stop()); mediaStream = undefined; }
+  }
+
+  async function finishRecording() {
+    const sessionId = captureId;
+    if (!sessionId) return;
+    await chunkUpload;
+    if (!nextCaptureSequence) {
+      await request(`/captures/${sessionId}`, { method: "DELETE" }).catch(() => undefined);
+      captureId = undefined; error = "The microphone recording was empty.";
+      return;
+    }
+    if (captureFailure) {
+      const meetingId = detail?.meeting.id;
+      captureId = undefined;
+      if (meetingId) await openMeeting(meetingId).catch(showError);
+      error = captureFailure;
+      status = "Saved chunks are available to process or discard below.";
+      return;
+    }
+    busy = true; status = `${captureWarning ? `${captureWarning} ` : ""}Sealing saved audio and starting local processing…`;
+    try {
+      await request(`/captures/${sessionId}/seal`, { method: "POST", body: JSON.stringify({ expectedSequenceCount: nextCaptureSequence }) });
+      const job = await request<{ id: string }>(`/meetings/${detail?.meeting.id}/jobs`, {
+        method: "POST", body: JSON.stringify({ profileId, language }),
+      });
+      captureId = undefined; watchJob(job.id);
+    } catch (e) { error = e instanceof Error ? e.message : "Recording could not be sealed"; status = ""; busy = false; }
+  }
+
+  async function processSavedCapture(capture: Capture) {
+    if (!detail) return;
+    busy = true; error = ""; status = "Sealing the locally saved portion of the recording…";
+    try {
+      await request(`/captures/${capture.id}/seal`, { method: "POST", body: JSON.stringify({ expectedSequenceCount: capture.next_sequence }) });
+      const job = await request<{ id: string }>(`/meetings/${detail.meeting.id}/jobs`, {
+        method: "POST", body: JSON.stringify({ profileId, language }),
+      });
+      watchJob(job.id);
+    } catch (e) { error = e instanceof Error ? e.message : "Saved audio could not be processed"; status = ""; busy = false; }
+  }
+
+  async function discardSavedCapture(capture: Capture) {
+    try { await request(`/captures/${capture.id}`, { method: "DELETE" }); if (detail) await openMeeting(detail.meeting.id); }
+    catch (e) { showError(e); }
   }
 
   function stopRecording() {
@@ -309,8 +372,9 @@
         {#if detail}
           <div class="panel-head"><div><p class="eyebrow">{new Date(detail.meeting.recordedAt).toLocaleString()}</p><h1>{detail.meeting.title}</h1></div><button class="quiet" onclick={() => (detail = null)}>← Meetings</button></div>
           {#if detail.asset}<p class="muted">Audio length: {(detail.asset.durationMs / 60000).toFixed(1)} min {#if detail.asset.decodeWarning}<span class="warning">· Audio decode warning</span>{/if}</p>{/if}
-          <section class="panel"><h2>Add recording</h2><p>Upload audio or video, or record through the microphone. Processing stays local.</p><div class="live-record"><button class:recording class="quiet" type="button" onclick={() => recording ? stopRecording() : startRecording()}>{recording ? "Stop recording" : "● Record live"}</button>{#if recording}<span class="record-indicator"><i></i> Recording · {formatElapsed(recordingSeconds)}</span>{:else if recordedFile}<span class="muted">Ready to upload · {(recordedFile.size / 1048576).toFixed(1)} MB</span>{/if}</div><form class="upload-form" onsubmit={upload}>
-            <label class="file-input">Recording file<input name="audio" type="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.mp4,.mov,.webm" required={!recordedFile} /></label>
+          {#each detail.captures as capture (capture.id)}<section class="panel"><h2>Unfinished microphone capture</h2><p>Only acknowledged chunks were saved ({(capture.received_bytes / 1048576).toFixed(1)} MB). The last part of speech may be missing. Process the saved portion or discard it.</p><div class="downloads"><button class="primary" disabled={busy || !capture.next_sequence} onclick={() => processSavedCapture(capture)}>Process saved portion</button><button class="quiet" disabled={busy} onclick={() => discardSavedCapture(capture)}>Discard saved chunks</button></div></section>{/each}
+          <section class="panel"><h2>Add recording</h2><p>Upload audio or video, or record through the microphone. Live audio is saved to disk in short parts and processed after you stop. Processing stays local.</p><div class="live-record"><button class:recording class="quiet" type="button" onclick={() => recording ? stopRecording() : startRecording()} disabled={busy}>{recording ? "Stop recording" : "● Record live"}</button>{#if recording}<span class="record-indicator"><i></i> Recording · {formatElapsed(recordingSeconds)} · saving locally</span>{/if}</div><form class="upload-form" onsubmit={upload}>
+            <label class="file-input">Recording file<input name="audio" type="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.mp4,.mov,.webm" required /></label>
             <label>Hardware profile<select bind:value={profileId}>{#each profiles as p (p.id)}<option value={p.id} disabled={!p.compatible}>{p.id === "laptop8" ? "Laptop · RTX 3070 Ti · 8 GB" : p.id === "hospital16" ? "Workstation · RTX 5080 · 16 GB" : p.id} {!p.compatible ? "· unavailable on this computer" : p.asrFilesPresent && p.llmFilePresent ? "· ready" : "· models missing"}</option>{/each}</select></label>
             <label>ASR language<select bind:value={language}><option value="ro">Romanian</option><option value="ru">Russian</option><option value="en">English</option><option value="auto">Auto-detect</option></select></label>
             <button class="primary" disabled={busy || recording || !profiles.find((p) => p.id === profileId)?.asrFilesPresent || !profiles.find((p) => p.id === profileId)?.llmFilePresent}>{busy ? "Processing…" : "Transcribe recording"}</button>

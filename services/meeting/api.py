@@ -15,7 +15,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import AuthService, SESSION_COOKIE, SESSION_SECONDS
-from .contracts import CreateAccount, CreateJob, CreateMeeting, CreatePatient, ErrorEnvelope, FinalizeArtifact, GrantMeetingAccess, LoginRequest, ReviseSegment, SetAccountActive, SetupRequest, UpdatePatient
+from .contracts import CreateAccount, CreateCapture, CreateJob, CreateMeeting, CreatePatient, ErrorEnvelope, FinalizeArtifact, GrantMeetingAccess, LoginRequest, ReviseSegment, SealCapture, SetAccountActive, SetupRequest, UpdatePatient
+from .capture import CaptureError, seal_capture
 from .media import MAX_UPLOAD_BYTES, MediaError, decode
 from .patients import PatientDirectory
 from .storage import Storage, timestamp
@@ -104,7 +105,7 @@ def create_app(data_root: Path | None = None) -> FastAPI:
                        if configured_origins else DEFAULT_ALLOWED_ORIGINS)
     app.state.allowed_origins = allowed_origins
     app.add_middleware(CORSMiddleware, allow_origins=sorted(allowed_origins), allow_credentials=True,
-                       allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+                       allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
                        allow_headers=["Content-Type"])
 
     @app.middleware("http")
@@ -304,6 +305,7 @@ def create_app(data_root: Path | None = None) -> FastAPI:
                 "asset": asset_record(db.latest_asset(meeting_id, actor["organization_id"])),
                 "segments": [segment_record(row) for row in db.get_segments(meeting_id, actor["organization_id"])],
                 "decisions": db.get_meeting_decisions(meeting_id, actor["organization_id"]),
+                "captures": db.list_open_captures(meeting_id, actor["organization_id"]),
                 "artifact": artifact_record(artifact) if artifact else None}
 
     @app.post("/api/meetings/{meeting_id}/artifacts", status_code=201)
@@ -449,6 +451,72 @@ def create_app(data_root: Path | None = None) -> FastAPI:
                 # A failed ingest must not leave an untracked copy of sensitive media.
                 source.unlink(missing_ok=True)
                 decoded.unlink(missing_ok=True)
+
+    @app.post("/api/meetings/{meeting_id}/captures", status_code=201)
+    def create_capture(meeting_id: str, data: CreateCapture, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting_or_404(meeting_id, actor, db, write=True)
+        try:
+            capture = db.create_capture_session(meeting_id, actor["organization_id"], actor["id"], data.contentType)
+        except ValueError as exc:
+            raise ServiceError(422, "CAPTURE_FORMAT_UNSUPPORTED", str(exc)) from exc
+        return {"id": capture["id"], "state": capture["state"], "nextSequence": 0}
+
+    @app.get("/api/captures/{capture_id}")
+    def get_capture(capture_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        capture = db.get_capture_session(capture_id, actor["organization_id"])
+        if not capture or not db.meeting_permission(capture["meeting_id"], actor["id"], actor["organization_id"]):
+            raise ServiceError(404, "CAPTURE_NOT_FOUND", "Capture not found")
+        return {"id": capture["id"], "meetingId": capture["meeting_id"], "state": capture["state"],
+                "nextSequence": capture["next_sequence"], "receivedBytes": capture["received_bytes"],
+                "errorCode": capture["error_code"]}
+
+    @app.delete("/api/captures/{capture_id}")
+    def delete_capture(capture_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        if not db.delete_capture(capture_id, actor["organization_id"], actor["id"]):
+            raise ServiceError(404, "CAPTURE_NOT_FOUND", "Capture not found")
+        return {"ok": True}
+
+    @app.put("/api/captures/{capture_id}/chunks/{sequence}")
+    async def upload_capture_chunk(capture_id: str, sequence: int, request: Request,
+                                   actor: dict = Depends(principal), db: Storage = Depends(store)):
+        if sequence < 0 or sequence > 2159:
+            raise ServiceError(422, "CAPTURE_SEQUENCE_INVALID", "Capture chunk sequence is outside its limit")
+        capture = db.get_capture_session(capture_id, actor["organization_id"])
+        if not capture:
+            raise ServiceError(404, "CAPTURE_NOT_FOUND", "Capture not found")
+        meeting_or_404(capture["meeting_id"], actor, db, write=True)
+        if request.headers.get("content-type", "").casefold() != capture["content_type"].casefold():
+            raise ServiceError(415, "CAPTURE_FORMAT_CHANGED", "Capture chunk format does not match the session")
+        chunks = []
+        size = 0
+        async for part in request.stream():
+            size += len(part)
+            if size > 32 * 1024 * 1024:
+                raise ServiceError(413, "CAPTURE_CHUNK_TOO_LARGE", "A recording chunk exceeds 32 MiB")
+            chunks.append(part)
+        try:
+            return db.store_capture_chunk(capture_id, actor["organization_id"], actor["id"],
+                                          sequence, b"".join(chunks))
+        except LookupError as exc:
+            raise ServiceError(404, "CAPTURE_NOT_FOUND", "Capture not found") from exc
+        except OverflowError as exc:
+            raise ServiceError(413, "CAPTURE_TOO_LARGE", "The capture exceeds the 2 GiB limit") from exc
+        except ValueError as exc:
+            raise ServiceError(409, "CAPTURE_SEQUENCE_CONFLICT", str(exc)) from exc
+
+    @app.post("/api/captures/{capture_id}/seal")
+    async def seal_capture_route(capture_id: str, data: SealCapture,
+                                 actor: dict = Depends(principal), db: Storage = Depends(store)):
+        capture = db.get_capture_session(capture_id, actor["organization_id"])
+        if not capture:
+            raise ServiceError(404, "CAPTURE_NOT_FOUND", "Capture not found")
+        meeting_or_404(capture["meeting_id"], actor, db, write=True)
+        try:
+            asset = await asyncio.to_thread(seal_capture, db, capture_id, actor["organization_id"],
+                                            actor["id"], data.expectedSequenceCount)
+        except CaptureError as exc:
+            raise ServiceError(exc.status, exc.code, str(exc), retryable=exc.status >= 500) from exc
+        return {"asset": asset_record(asset), "state": "sealed"}
 
     @app.post("/api/meetings/{meeting_id}/jobs", status_code=202)
     def create_job(data: CreateJob, meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
