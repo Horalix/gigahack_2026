@@ -53,7 +53,7 @@ Use [the live handoff](../10-team-handoff.md) for the current parallel order. A 
 | [015 — Control local sensitive data and retention](PBI-015-privacy-retention-and-local-data-controls.md) | P0 | Sol / High | 002, 005, 010, 013 | OPEN |
 | [016 — Launch the complete app offline from prepared assets](PBI-016-offline-launch-and-packaging.md) | P0 | Luna / High | 003, 005, 007, 008, 010, 012 | OPEN |
 | [017 — Qualify language accuracy and one-hour performance](PBI-017-accuracy-and-one-hour-benchmark.md) | P0 | Luna / High | 004, 009, 010, 012, 016; collect references earlier | OPEN |
-| [018 — Suggest focused transcript corrections](PBI-018-ai-transcript-flags.md) | P1 | Sol / High | 009, 013, 014, 017 | OPEN |
+| [018 — Suggest focused transcript corrections](PBI-018-ai-transcript-flags.md) | P1 | Sol / High | 009, 013, 014, 017 | IN PROGRESS — implementation only; acceptance open |
 | [019 — Add anonymous speaker turns](PBI-019-speaker-diarization.md) | P1 | Sol / High | 004, 017 | OPEN |
 | [020 — Map and correct speaker labels](PBI-020-speaker-name-correction-ui.md) | P1 | Luna / High | 019, 013 | OPEN |
 | [021 — Qualify optional returning-speaker voice profiles](PBI-021-optional-voice-enrollment.md) | P2 | Sol / High | 019, 020, 015, 022 | OPEN |

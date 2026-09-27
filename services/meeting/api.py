@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .auth import AuthService, SESSION_COOKIE, SESSION_SECONDS
-from .contracts import CreateAccount, CreateCapture, CreateJob, CreateMeeting, CreatePatient, ErrorEnvelope, FinalizeArtifact, GrantMeetingAccess, LoginRequest, ReviewDecision, ReviseSegment, ReviseSegments, SealCapture, SetAccountActive, SetupRequest, UndoTranscriptRevision, UpdatePatient
+from .contracts import CreateAccount, CreateCapture, CreateJob, CreateMeeting, CreatePatient, ErrorEnvelope, FinalizeArtifact, GrantMeetingAccess, LoginRequest, ReviewDecision, ReviewTranscriptIssue, ReviseSegment, ReviseSegments, SealCapture, SetAccountActive, SetupRequest, UndoTranscriptRevision, UpdatePatient
 from .capture import CaptureError, seal_capture
 from .inference_lock import InferenceBusy, inference_device_lock
 from .media import MAX_UPLOAD_BYTES, MediaError, decode
@@ -383,6 +383,20 @@ def create_app(data_root: Path | None = None) -> FastAPI:
             raise ServiceError(404, "DECISION_NOT_FOUND", "Decision not found for the current transcript")
         return {"decisions": result}
 
+    @app.put("/api/meetings/{meeting_id}/transcript-issues/{issue_id}")
+    def review_transcript_issue(meeting_id: str, issue_id: str, data: ReviewTranscriptIssue,
+                                actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting = meeting_or_404(meeting_id, actor, db, write=True)
+        if actor["role"] == "reviewer":
+            raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot change transcript issue review state")
+        if meeting["transcript_revision"] != data.transcriptRevision:
+            raise ServiceError(409, "TRANSCRIPT_ISSUE_STALE", "The transcript changed; reload issues before reviewing")
+        result = db.review_transcript_issue(meeting_id, actor["organization_id"], actor["id"],
+                                            data.transcriptRevision, issue_id, data.reviewStatus)
+        if not result:
+            raise ServiceError(404, "TRANSCRIPT_ISSUE_NOT_FOUND", "Issue not found for the current transcript")
+        return {"decisions": result}
+
     @app.get("/api/meetings/{meeting_id}/audio")
     def play_meeting_audio(meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
         meeting_or_404(meeting_id, actor, db)
@@ -411,6 +425,10 @@ def create_app(data_root: Path | None = None) -> FastAPI:
             raise ServiceError(409, "ARTIFACT_SNAPSHOT_STALE", "Current transcript and decisions are not ready for approval")
         if any(item.get("reviewStatus") not in {"accepted", "excluded"} for item in decisions.get("items", [])):
             raise ServiceError(409, "DECISION_REVIEW_INCOMPLETE", "Accept or exclude every suggested decision before approval")
+        if any(item.get("reviewStatus") != "accepted"
+               for item in decisions.get("transcriptIssues", [])):
+            raise ServiceError(409, "TRANSCRIPT_ISSUE_REVIEW_INCOMPLETE",
+                               "Confirm or apply every flagged transcript issue before approval")
         from .rendering import render_minutes_html
         approved_at = timestamp()
         content = render_minutes_html(meeting, db.get_segments(meeting_id, actor["organization_id"]), decisions,

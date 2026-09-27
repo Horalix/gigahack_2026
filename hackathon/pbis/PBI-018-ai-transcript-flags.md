@@ -1,7 +1,7 @@
 # PBI-018: Suggest focused transcript corrections
 
 Parent: `hackathon/pbis/README.md`  
-Status: OPEN  
+Status: IN PROGRESS — implementation is present; acceptance remains open  
 Priority: P1 — only after today's P0 passes  
 Owner: You  
 Recommended model: **GPT-6 Sol**  
@@ -45,8 +45,9 @@ Timebox first experiment to 90 minutes after P0; disable suggestions if quality 
 
 ## Completion record
 
-- Commit / changed files: pending
-- Commands and observed behavior: pending
-- Acceptance evidence / limitations: pending
+- Current implementation: transcript issue candidates are emitted alongside decision events in the same bounded local LLM call. Candidate spans must exactly match their source segment; flags include a reason, optional alternatives, timestamps and revision. The workbench supports audio replay, single correction, multi-select preview/apply, keep-as-written and defer. Unreviewed/deferred flags block minutes approval; corrections create a new transcript revision and require reprocessing.
+- Changed files: `services/meeting/adapters/llm.py`, `services/meeting/decisions.py`, `services/meeting/contracts.py`, `services/meeting/storage.py`, `services/meeting/api.py`, `src/lib/notavra/LocalWorkbench.svelte`.
+- Commands and observed behavior: no tests, builds or model runs were performed, per the user's instruction to leave validation for manual app use.
+- Acceptance evidence / limitations: incomplete and unqualified. The model's flag precision/recall, false-alarm burden, correction behavior in the UI and impact on end-to-end processing time have not been reviewed. This feature must not be represented as clinically accurate.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
 

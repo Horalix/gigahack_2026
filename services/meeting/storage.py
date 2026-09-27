@@ -1111,3 +1111,37 @@ class Storage:
             db.execute("UPDATE artifacts SET status='superseded' WHERE meeting_id=? AND organization_id=? AND status='ready'",
                        (meeting_id, organization_id))
             return result
+
+    def review_transcript_issue(self, meeting_id: str, organization_id: str, actor_id: str,
+                                transcript_revision: int, issue_id: str, review_status: str) -> dict | None:
+        now = timestamp()
+        with self.transaction() as db:
+            meeting = db.execute("SELECT transcript_revision FROM meetings WHERE id=? AND organization_id=?",
+                                 (meeting_id, organization_id)).fetchone()
+            if not meeting or meeting["transcript_revision"] != transcript_revision:
+                return None
+            row = db.execute("""SELECT d.job_id,d.result_json FROM decision_results d JOIN jobs j
+                ON j.id=d.job_id AND j.state='ready'
+                WHERE d.meeting_id=? AND d.organization_id=? AND d.transcript_revision=?
+                ORDER BY d.created_at DESC,d.job_id DESC LIMIT 1""",
+                (meeting_id, organization_id, transcript_revision)).fetchone()
+            if not row:
+                return None
+            result = json.loads(row["result_json"])
+            issue = next((item for item in result.get("transcriptIssues", [])
+                          if item.get("id") == issue_id), None)
+            if not issue:
+                return None
+            previous_status = issue.get("reviewStatus")
+            history = issue.setdefault("reviewHistory", [])
+            history.append({"actorId": actor_id, "at": now, "from": previous_status, "to": review_status})
+            del history[:-20]
+            issue["reviewStatus"] = review_status
+            issue["reviewedBy"] = actor_id
+            issue["reviewedAt"] = now
+            db.execute("UPDATE decision_results SET result_json=?,created_at=? WHERE job_id=?",
+                       (json.dumps(result, ensure_ascii=False, separators=(",", ":")), now, row["job_id"]))
+            if previous_status != review_status:
+                db.execute("UPDATE artifacts SET status='superseded' WHERE meeting_id=? AND organization_id=? AND status='ready'",
+                           (meeting_id, organization_id))
+            return result

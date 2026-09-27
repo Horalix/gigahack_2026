@@ -68,6 +68,8 @@
   let decisionDraft = $state<{ status: string; text: string; ownerLabel: string; originalDateExpression: string }>({
     status: "proposed", text: "", ownerLabel: "", originalDateExpression: "",
   });
+  let issueChoices = $state<Record<string, string>>({});
+  let selectedIssueIds = $state<string[]>([]);
   let progressTimer: ReturnType<typeof setInterval> | undefined;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let searchMatches = $derived.by(() => {
@@ -178,6 +180,8 @@
     stopPolling();
     reviewConfirmed = false;
     editingDecision = null;
+    issueChoices = {};
+    selectedIssueIds = [];
     selectedCorrectionSegments = [];
     findQuery = "";
     activeFindIndex = 0;
@@ -353,8 +357,82 @@
     } catch (e) { showError(e); }
   }
 
+  async function reviewTranscriptIssue(issue: any, reviewStatus: "accepted" | "deferred") {
+    if (!detail) return;
+    const meetingId = detail.meeting.id;
+    try {
+      await request(`/meetings/${meetingId}/transcript-issues/${issue.id}`, {
+        method: "PUT", body: JSON.stringify({ transcriptRevision: detail.meeting.transcriptRevision, reviewStatus }),
+      });
+      await openMeeting(meetingId);
+      status = reviewStatus === "accepted" ? "Transcript wording confirmed as written." : "Transcript issue deferred; the suggestion was not applied.";
+    } catch (e) { showError(e); }
+  }
+
+  async function applyTranscriptIssue(issue: any) {
+    if (!detail) return;
+    const segment = detail.segments.find((candidate) => candidate.id === issue.segmentId);
+    const replacement = issueChoices[issue.id] || issue.suggestedText;
+    if (!segment || !replacement || segment.text.slice(issue.startOffset, issue.endOffset) !== issue.suspectText) {
+      showError("This suggestion no longer matches the transcript. Reload the meeting before applying it.");
+      return;
+    }
+    const corrected = segment.text.slice(0, issue.startOffset) + replacement + segment.text.slice(issue.endOffset);
+    const meetingId = detail.meeting.id;
+    try {
+      await request(`/meetings/${meetingId}/segments/${segment.id}`, { method: "PUT", body: JSON.stringify({
+        transcriptRevision: detail.meeting.transcriptRevision, text: corrected,
+      }) });
+      await openMeeting(meetingId);
+      status = "Suggested correction applied. Reprocess saved audio to refresh decisions and transcript flags.";
+    } catch (e) { showError(e); }
+  }
+
+  function buildSelectedIssueCorrections() {
+    if (!detail) return { corrections: [] as { segmentId: string; oldText: string; text: string }[], count: 0 };
+    const selected = detail.decisions?.transcriptIssues?.filter((issue: any) => selectedIssueIds.includes(issue.id)) || [];
+    const bySegment = new Map<string, any[]>();
+    for (const issue of selected) {
+      const replacement = issueChoices[issue.id] || issue.suggestedText;
+      if (issue.reviewStatus === "accepted" || !replacement) continue;
+      bySegment.set(issue.segmentId, [...(bySegment.get(issue.segmentId) || []), { ...issue, replacement }]);
+    }
+    const corrections = [];
+    for (const [segmentId, issues] of bySegment) {
+      const segment = detail.segments.find((candidate) => candidate.id === segmentId);
+      if (!segment || issues.some((issue) => segment.text.slice(issue.startOffset, issue.endOffset) !== issue.suspectText)) continue;
+      const ordered = [...issues].sort((left, right) => left.startOffset - right.startOffset);
+      if (ordered.some((issue, index) => index > 0 && issue.startOffset < ordered[index - 1].endOffset)) continue;
+      let text = segment.text;
+      for (const issue of issues.sort((left, right) => right.startOffset - left.startOffset)) {
+        text = text.slice(0, issue.startOffset) + issue.replacement + text.slice(issue.endOffset);
+      }
+      corrections.push({ segmentId, oldText: segment.text, text });
+    }
+    return { corrections, count: selected.length };
+  }
+
+  async function applySelectedTranscriptIssues() {
+    if (!detail) return;
+    const { corrections } = buildSelectedIssueCorrections();
+    if (!corrections.length) return;
+    const meetingId = detail.meeting.id;
+    try {
+      await request(`/meetings/${meetingId}/segments`, { method: "PUT", body: JSON.stringify({
+        transcriptRevision: detail.meeting.transcriptRevision,
+        corrections: corrections.map(({ segmentId, text }) => ({ segmentId, text })),
+      }) });
+      await openMeeting(meetingId);
+      status = `Applied reviewed suggestions across ${corrections.length} transcript passages. Reprocess saved audio to refresh decisions.`;
+    } catch (e) { showError(e); }
+  }
+
   function allDecisionsReviewed() {
     return detail?.decisions?.items?.every((item: any) => ["accepted", "excluded"].includes(item.reviewStatus)) ?? true;
+  }
+
+  function allTranscriptIssuesReviewed() {
+    return detail?.decisions?.transcriptIssues?.every((issue: any) => issue.reviewStatus === "accepted") ?? true;
   }
 
   async function createMeeting(event: SubmitEvent) {
@@ -708,9 +786,30 @@
             <div class="find-toolbar"><label>Find in transcript<input bind:value={findQuery} oninput={() => (activeFindIndex = 0)} onkeydown={findKeydown} placeholder="Search Romanian or Cyrillic text" /></label><span>{searchMatches.length ? `${activeFindIndex + 1} of ${searchMatches.length}` : "0 matches"}</span><button class="quiet" disabled={!searchMatches.length} onclick={() => moveFindMatch(-1)}>↑ Previous</button><button class="quiet" disabled={!searchMatches.length} onclick={() => moveFindMatch(1)}>↓ Next</button></div>
             {#if findQuery.trim() && user.role !== "reviewer"}{@const bulkPreview = buildSelectedCorrections()}<div class="bulk-correction"><label>Replace with<input bind:value={replacementText} placeholder="Correct spelling or term" /></label><button class="primary" disabled={!bulkPreview.count} onclick={replaceInSelectedPassages}>Replace {bulkPreview.count} matches in selected passages</button><span>{bulkPreview.corrections.length} passages selected for change</span></div>{#each bulkPreview.corrections as correction (correction.segmentId)}<details class="correction-preview"><summary>Preview before and after</summary><del>{correction.oldText}</del><p>{correction.text}</p></details>{/each}{/if}
             <div class="transcript">{#each detail.segments as segment (segment.id)}{@const parts = highlightParts(segment.text, segment.id)}<p class:with-find={!!findQuery.trim() && user.role !== "reviewer"} id={`segment-${segment.id}`}><button class="play-passage" type="button" aria-label={`Play audio from ${formatTime(segment.startMs)}`} title="Play from this passage" onclick={() => playPassage(segment.startMs)}>▶</button><time>{formatTime(segment.startMs)}</time>{#if findQuery.trim() && user.role !== "reviewer"}<input class="select-match" type="checkbox" value={segment.id} bind:group={selectedCorrectionSegments} aria-label={`Select passage at ${formatTime(segment.startMs)} for bulk correction`} />{/if}{#if editingSegment === segment.id}<span class="edit-cell"><textarea bind:value={editText} rows="2"></textarea><button class="primary" onclick={() => saveSegment(segment)}>Save correction</button><button class="quiet" onclick={() => (editingSegment = null)}>Cancel</button></span>{:else}<span>{#each parts as part}<mark class:current={part.current} class:found={part.match}>{part.text}</mark>{/each}</span>{#if user.role !== "reviewer"}<button class="edit-button" onclick={() => { editingSegment = segment.id; editText = segment.text; }}>Edit</button>{/if}{/if}<small>{segment.language}</small></p>{/each}</div></section>{/if}
+          {#if detail.decisions?.transcriptIssues?.length}
+            {@const bulkIssues = buildSelectedIssueCorrections()}
+            <section class="panel">
+              <h2>Transcript flags <span>check each highlighted phrase against the audio</span></h2>
+              <p class="muted">These are text-context suggestions, not evidence of what was spoken. Nothing is changed unless you apply a correction.</p>
+              {#each detail.decisions.transcriptIssues as issue (issue.id)}
+                <article class="transcript-issue">
+                  <div class="issue-phrase">
+                    {#if user.role !== "reviewer" && issue.alternatives?.length && issue.reviewStatus !== "accepted"}<input type="checkbox" value={issue.id} bind:group={selectedIssueIds} aria-label={`Select suggested correction for ${issue.suspectText}`} />{/if}
+                    <button class="play-passage" type="button" aria-label={`Play audio near ${issue.suspectText}`} onclick={() => playPassage(issue.startMs)}>▶</button>
+                    <mark>{issue.suspectText}</mark>
+                    <span>{formatTime(issue.startMs)} · {issue.reviewStatus === "needs_review" ? "Needs review" : issue.reviewStatus}</span>
+                  </div>
+                  <p>{issue.reason}</p>
+                  {#if issue.alternatives?.length}<label>Possible wording<select value={issueChoices[issue.id] || issue.suggestedText || issue.alternatives[0]} onchange={(event) => (issueChoices[issue.id] = event.currentTarget.value)}>{#each issue.alternatives as alternative}<option value={alternative}>{alternative}</option>{/each}</select></label><div class="suggestion-preview"><del>{issue.suspectText}</del><span>→</span><b>{issueChoices[issue.id] || issue.suggestedText || issue.alternatives[0]}</b></div>{/if}
+                  {#if user.role !== "reviewer" && issue.reviewStatus !== "accepted"}<div class="downloads">{#if issue.alternatives?.length}<button class="primary" onclick={() => applyTranscriptIssue(issue)}>Apply correction</button>{/if}<button class="quiet" onclick={() => reviewTranscriptIssue(issue, "accepted")}>Keep wording</button><button class="quiet" onclick={() => reviewTranscriptIssue(issue, "deferred")}>Defer</button></div>{/if}
+                </article>
+              {/each}
+              {#if bulkIssues.corrections.length}<div class="issue-bulk"><b>Before and after</b>{#each bulkIssues.corrections as correction (correction.segmentId)}<p><del>{correction.oldText}</del><span>{correction.text}</span></p>{/each}<button class="primary" onclick={applySelectedTranscriptIssues}>Apply selected corrections across {bulkIssues.corrections.length} passages</button></div>{/if}
+            </section>
+          {/if}
           {#if detail.decisions}<section class="panel"><h2>Decisions and actions <span>human review required</span></h2>{#if detail.decisions.items?.length}{#each detail.decisions.items as item (item.id)}<article class="action-card"><div class="action-title"><span class="action-kind">{item.kind}</span><span class="action-state">{item.status}</span><b>{item.text}</b></div><div class="action-meta">{#if item.ownerLabel}<span>Owner: {item.ownerLabel}</span>{/if}{#if item.originalDateExpression}<span>Due: {item.originalDateExpression}</span>{/if}<span>Review: {item.reviewStatus || "needs_review"}</span></div>{#each item.taskEvidence as evidence (evidence.segmentId + evidence.startMs)}<blockquote><time>{formatTime(evidence.startMs)}</time>“{evidence.quote}”</blockquote>{/each}{#if user.role !== "reviewer"}{#if editingDecision === item.id}<div class="decision-edit"><label>Action<textarea bind:value={decisionDraft.text} maxlength="1200" rows="3"></textarea></label><label>Classification<select bind:value={decisionDraft.status}><option value="proposed">Proposed</option><option value="confirmed">Confirmed</option><option value="rejected">Rejected</option><option value="cancelled">Cancelled</option><option value="unresolved">Unresolved</option></select></label><label>Owner<input bind:value={decisionDraft.ownerLabel} maxlength="240" /></label><label>Deadline<input bind:value={decisionDraft.originalDateExpression} maxlength="240" /></label><div class="downloads"><button class="primary" disabled={!decisionDraft.text.trim()} onclick={() => saveDecisionEdit(item)}>Save edits</button><button class="quiet" onclick={() => (editingDecision = null)}>Cancel</button></div></div>{:else}<div class="downloads"><button class="quiet" onclick={() => editDecision(item)}>Edit action</button><button class:chosen={item.reviewStatus === "accepted"} class="quiet" onclick={() => reviewDecision(item.id, "accepted")}>Include in minutes</button><button class:chosen={item.reviewStatus === "excluded"} class="quiet" onclick={() => reviewDecision(item.id, "excluded")}>Exclude</button></div>{/if}{/if}</article>{/each}{:else}<p>No decisions or follow-up actions were identified.</p>{/if}<small class="review-note">Suggested by local AI and backed by transcript excerpts. Confirm or correct before use.</small></section>{/if}
           {#if detail.artifact}<p class="status">Current approved file · revision {detail.meeting.transcriptRevision} · SHA-256 {detail.artifact.sha256} · <a href={`/api/artifacts/${detail.artifact.id}/content`}>Download again</a></p>{/if}
-          {#if detail.decisions && user.role !== "reviewer"}<section class="panel"><label class="approval"><input type="checkbox" bind:checked={reviewConfirmed} /> I reviewed the transcript and every suggested decision/action above.</label>{#if !allDecisionsReviewed()}<p class="muted">Include or exclude each suggested action before approving minutes.</p>{/if}<button class="primary" disabled={!reviewConfirmed || !allDecisionsReviewed()} onclick={approveAndDownload}>Approve and download HTML minutes</button><p class="muted">This creates a local, self-contained file for the current transcript revision. Corrections supersede it.</p></section>{/if}
+          {#if detail.decisions && user.role !== "reviewer"}<section class="panel"><label class="approval"><input type="checkbox" bind:checked={reviewConfirmed} /> I reviewed the transcript, flagged phrases and suggested actions above.</label>{#if !allDecisionsReviewed()}<p class="muted">Include or exclude each suggested action before approving minutes.</p>{/if}{#if !allTranscriptIssuesReviewed()}<p class="muted">Confirm each flagged phrase or apply a correction. Deferred items keep approval blocked.</p>{/if}<button class="primary" disabled={!reviewConfirmed || !allDecisionsReviewed() || !allTranscriptIssuesReviewed()} onclick={approveAndDownload}>Approve and download HTML minutes</button><p class="muted">This creates a local, self-contained file for the current transcript revision. Corrections supersede it.</p></section>{/if}
           {#if detail.asset && detail.latestJob?.state === "failed" && user.role !== "reviewer"}<section class="panel"><p>Local processing stopped at {detail.latestJob.stage} ({detail.latestJob.errorCode || "unknown error"}). Retry resumes from the saved checkpoint when available.</p><button class="primary" disabled={busy} onclick={retryFailedJob}>Retry failed step</button></section>{/if}
           {#if detail.asset && !detail.decisions && user.role !== "reviewer"}<section class="panel"><p>The transcript changed or decision extraction is not ready. Re-run processing from the saved audio before approving minutes.</p><button class="primary" disabled={busy} onclick={reprocessSavedAudio}>Reprocess saved audio locally</button></section>{/if}
           {#if !detail.segments.length}<div class="empty"><span>01</span><h2>Upload the recording</h2><p>Notavra processes the audio locally, then shows the transcript and evidence-backed actions here.</p></div>{/if}
@@ -728,6 +827,6 @@
   .workspace{max-width:1440px;margin:auto;padding:22px 32px;min-height:100vh;box-sizing:border-box;display:grid;grid-template-rows:auto 1fr auto;gap:20px}.workspace header{display:flex;align-items:center;gap:16px;border-bottom:1px solid #dfe5e9;padding-bottom:16px}.workspace header>div{display:flex;align-items:center;gap:10px;margin-right:auto}.workspace header img{width:34px;height:36px}.workspace header span{display:grid}.workspace header small{font-size:10px;letter-spacing:.1em;color:#71808b}.quiet{background:white;border:1px solid #d9e0e5;border-radius:8px;padding:8px 12px;color:#37505d}.columns{display:grid;grid-template-columns:330px minmax(0,1fr);gap:22px;min-height:0}.columns aside,.content{min-width:0}.columns aside{border-right:1px solid #dfe5e9;padding-right:20px}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.panel-head h1,.panel-head h2{margin:0}.meeting-list{list-style:none;padding:0;margin:12px 0}.meeting-list button{width:100%;display:grid;text-align:left;border:0;border-radius:8px;background:transparent;padding:12px;color:inherit;gap:4px}.meeting-list button:hover,.meeting-list button.chosen{background:#e7f2f0}.meeting-list small,.muted,.eyebrow{color:#71808b}.pager{display:flex;justify-content:space-between;align-items:center;color:#6c7a85;font-size:13px}.pager button{border:1px solid #d9e0e5;border-radius:6px;background:white;padding:5px 10px}.pager button:disabled{opacity:.4}.new-meeting{display:grid;gap:12px;border-top:1px solid #dfe5e9;margin-top:18px;padding-top:18px}.new-meeting h3{margin:0}.content{display:grid;align-content:start;gap:16px}.eyebrow{margin:0 0 3px;font-size:13px}.panel{background:white;border:1px solid #e1e6ea;border-radius:12px;padding:18px 20px}.panel h2{font-size:18px;margin:0 0 8px}.panel h2 span{font-size:12px;font-weight:400;color:#71808b;margin-left:8px}.panel>p{margin:0 0 14px;color:#687985}.upload-form{display:grid;grid-template-columns:minmax(180px,1fr) 220px 155px auto;align-items:end;gap:12px}.upload-form input[type=file]{padding:8px}.upload-form label{font-size:13px}.status{color:#17675f;margin:14px 0 0}.transcript{max-height:55vh;overflow:auto}.transcript p{display:grid;grid-template-columns:25px 76px 1fr 35px;gap:12px;border-bottom:1px solid #eef1f3;padding:10px 0;margin:0}.transcript time,.transcript small{color:#82909a;font-size:12px}.warning{color:#9a6512}.empty{align-self:center;justify-self:center;max-width:560px;text-align:center;padding:56px 20px}.empty>span{display:inline-grid;place-items:center;background:#dcefea;color:#14655c;border-radius:50%;width:42px;height:42px;font-weight:800}.empty p{color:#6e7d87}.workspace footer{text-align:center;color:#81909a;font-size:12px;border-top:1px solid #dfe5e9;padding-top:12px}
   .transcript p{grid-template-columns:25px 76px 1fr 52px 35px}.edit-button{border:0;background:transparent;color:#17675f;font-size:12px}.edit-cell{display:grid;grid-template-columns:1fr auto auto;gap:8px}.edit-cell textarea{width:100%;box-sizing:border-box;border:1px solid #d7e0e7;border-radius:6px;padding:8px;font:inherit}.downloads{display:flex;gap:7px}.action-card{border-top:1px solid #eef1f3;padding:14px 0}.action-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.action-title b{font-size:15px}.action-kind,.action-state{border-radius:999px;background:#e8f2f0;color:#17675f;padding:3px 9px;font-size:11px;text-transform:capitalize}.action-state{background:#f1f2ed;color:#71632e}.action-meta{display:flex;gap:16px;color:#687985;font-size:13px;margin:8px 0}.action-card blockquote{margin:8px 0 0 12px;border-left:2px solid #83b7ad;padding:4px 10px;color:#42565f;font-size:13px}.action-card blockquote time{color:#81909a;margin-right:8px;font-size:11px}.review-note{display:block;border-top:1px solid #eef1f3;padding-top:10px;color:#71808b}
   .transcript p.with-find{grid-template-columns:25px 76px 24px 1fr 52px 35px}.select-match{align-self:center}.find-toolbar,.bulk-correction{display:flex;align-items:end;gap:10px;margin:10px 0 14px;flex-wrap:wrap}.find-toolbar label,.bulk-correction label{display:grid;gap:5px;font-size:12px;color:#71808b;min-width:200px}.find-toolbar input,.bulk-correction input{border:1px solid #d7e0e7;border-radius:6px;padding:8px;font:inherit}.find-toolbar span{color:#61727c;font-size:12px;margin:0 auto 8px 0}.bulk-correction{background:#f6f9f8;padding:10px;border-radius:8px}.audio-review{width:100%;margin:8px 0 14px}.play-passage{align-self:start;width:25px;height:25px;padding:0;border:1px solid #d9e0e5;border-radius:6px;background:white;color:#17675f;cursor:pointer}.play-passage:hover{background:#e7f2f0}.transcript mark{background:#fff0af;color:inherit}.transcript mark.current{background:#ffce57;outline:2px solid #e6a400;border-radius:2px}
-  .approval{display:flex;align-items:center;gap:9px;margin-bottom:14px;font-size:14px}.approval input{width:auto}.live-record{display:flex;align-items:center;gap:12px;margin:0 0 16px}.quiet.recording{border-color:#cd5b58;color:#a73535}.record-indicator{display:flex;align-items:center;gap:8px;color:#aa3d3d;font-size:13px;font-variant-numeric:tabular-nums}.record-indicator i{width:9px;height:9px;border-radius:50%;background:#cd4b48;animation:pulse 1.2s infinite}.record-health{display:flex;align-items:center;gap:8px;color:#71808b}.record-health meter{width:100px;height:12px}.record-indicator small{color:#71808b;font-size:11px;font-weight:400}.live-transcript{margin-top:12px;background:#f7faf9;padding:12px 16px}.live-transcript h3{margin:0 0 6px;font-size:14px}.live-transcript h3 span{color:#71808b;font-size:11px;font-weight:400}.live-transcript .transcript{max-height:28vh}@keyframes pulse{50%{opacity:.3}}
+  .transcript-issue{border-top:1px solid #eef1f3;padding:14px 0;display:grid;gap:9px}.issue-phrase{display:flex;align-items:center;gap:10px}.issue-phrase mark{background:#ffe0bb;border-radius:3px;padding:2px 5px}.issue-phrase span{color:#71808b;font-size:12px}.transcript-issue p{margin:0;color:#536671}.transcript-issue label{display:grid;gap:5px;max-width:420px;color:#71808b;font-size:12px}.transcript-issue select{border:1px solid #d7e0e7;border-radius:6px;padding:8px;color:#17212b;background:white}.suggestion-preview{display:flex;align-items:center;gap:8px;color:#536671;font-size:13px}.suggestion-preview del{color:#8b5d58}.approval{display:flex;align-items:center;gap:9px;margin-bottom:14px;font-size:14px}.approval input{width:auto}.live-record{display:flex;align-items:center;gap:12px;margin:0 0 16px}.quiet.recording{border-color:#cd5b58;color:#a73535}.record-indicator{display:flex;align-items:center;gap:8px;color:#aa3d3d;font-size:13px;font-variant-numeric:tabular-nums}.record-indicator i{width:9px;height:9px;border-radius:50%;background:#cd4b48;animation:pulse 1.2s infinite}.record-health{display:flex;align-items:center;gap:8px;color:#71808b}.record-health meter{width:100px;height:12px}.record-indicator small{color:#71808b;font-size:11px;font-weight:400}.live-transcript{margin-top:12px;background:#f7faf9;padding:12px 16px}.live-transcript h3{margin:0 0 6px;font-size:14px}.live-transcript h3 span{color:#71808b;font-size:11px;font-weight:400}.live-transcript .transcript{max-height:28vh}@keyframes pulse{50%{opacity:.3}}
   @media(max-width:900px){.columns{grid-template-columns:1fr}.columns aside{border:0;padding:0}.upload-form{grid-template-columns:1fr 1fr}.workspace{padding:18px}.transcript p{grid-template-columns:25px 62px 1fr 52px 35px}.transcript p.with-find{grid-template-columns:25px 62px 24px 1fr 52px 35px}}
 </style>

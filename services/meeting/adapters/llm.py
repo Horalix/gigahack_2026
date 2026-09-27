@@ -65,6 +65,16 @@ def _response_schema(required_key: str) -> dict:
                       "dateExpression": {"type": ["string", "null"]}, "evidence": evidence,
                       "ownerEvidence": evidence, "dateEvidence": evidence}
         required = list(properties)
+        issue = {"type": "object", "additionalProperties": False,
+                 "required": ["segmentId", "suspectText", "suggestedText", "reason", "alternatives"],
+                 "properties": {
+                     "segmentId": {"type": "string"},
+                     "suspectText": {"type": "string"},
+                     "suggestedText": {"type": ["string", "null"]},
+                     "reason": {"type": "string"},
+                     "alternatives": {"type": "array", "maxItems": 3,
+                                      "items": {"type": "string"}},
+                 }}
     elif required_key == "items":
         properties = {"status": {"type": "string", "enum": ["proposed", "confirmed", "rejected", "cancelled", "unresolved"]},
                       "eventIndexes": {"type": "array", "minItems": 1, "maxItems": 120,
@@ -85,8 +95,12 @@ def _response_schema(required_key: str) -> dict:
     result_items = {"type": "array", "items": item_schema}
     if required_key == "items":
         result_items["maxItems"] = 120
-    return {"type": "object", "additionalProperties": False, "required": [required_key],
-            "properties": {required_key: result_items}}
+    root_properties = {required_key: result_items}
+    if required_key == "events":
+        root_properties["transcriptIssues"] = {"type": "array", "maxItems": 4, "items": issue}
+    root_required = [required_key, "transcriptIssues"] if required_key == "events" else [required_key]
+    return {"type": "object", "additionalProperties": False, "required": root_required,
+            "properties": root_properties}
 
 
 class LocalLLM:

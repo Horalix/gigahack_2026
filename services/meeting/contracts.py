@@ -130,6 +130,13 @@ class ReviewDecision(BaseModel):
     originalDateExpression: str | None = Field(default=None, max_length=240)
 
 
+class ReviewTranscriptIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transcriptRevision: int = Field(ge=1)
+    reviewStatus: Literal["accepted", "deferred"]
+
+
 class CreateCapture(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
