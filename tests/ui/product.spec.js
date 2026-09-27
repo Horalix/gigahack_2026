@@ -107,6 +107,14 @@ test("doctor can upload, review and approve a local transcript", async ({ page }
   await expect(page.getByText("Transcript and decisions are ready for review.")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText("Pacientul va reveni luni.").first()).toBeVisible();
   await expect(page.getByRole("heading", { name: /Decisions and actions/ })).toBeVisible();
+  await page.locator(".audio-review").evaluate((element) => {
+    const audio = /** @type {HTMLAudioElement} */ (element);
+    Object.defineProperty(audio, "currentTime", { configurable: true, writable: true, value: 0 });
+    audio.play = () => { audio.dataset.played = "true"; return Promise.resolve(); };
+  });
+  await page.getByRole("button", { name: "Play audio from 00:00:01" }).click();
+  await expect(page.locator(".audio-review")).toHaveAttribute("data-played", "true");
+  await expect.poll(() => page.locator(".audio-review").evaluate((element) => /** @type {HTMLAudioElement} */ (element).currentTime)).toBe(1);
   const approve = page.getByRole("button", { name: "Approve and download HTML minutes" });
   await expect(approve).toBeDisabled();
   await page.getByRole("checkbox", { name: /I reviewed the transcript/ }).check();
