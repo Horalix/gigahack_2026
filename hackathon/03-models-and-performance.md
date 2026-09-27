@@ -1,6 +1,6 @@
 # Model switching and the 900-second budget
 
-**Plan plus current experiment evidence; see [ASR comparison results](ASR_COMPARISON_RESULTS.md) and the [PBI index](pbis/README.md) for live status.** Confirmed by the user: RTX 3070 Ti Mobile with 8 GB VRAM and 24 GB system RAM; remote RTX 5080 with 16 GB VRAM available for comparison. Laptop Whisper batch 2 has run twice on the same 702.5s Romanian sample (46.7s, 51.64% WER, 35.28% CER, 4,539 MiB observed device-wide peak). The integrated laptop8 app then reached `ready` on the M4A in 123s (upload/decode, ASR and decisions), a 10.5 min/hour projection. The 5080 host and a full one-hour pipeline remain untested.
+**Plan plus current experiment evidence; see [ASR comparison results](ASR_COMPARISON_RESULTS.md) and the [PBI index](pbis/README.md) for live status.** Confirmed by the user: RTX 3070 Ti Mobile with 8 GB VRAM and 24 GB system RAM; remote RTX 5080 with 16 GB VRAM is available but cannot be reached from this checkout. Laptop Whisper batch 2 has run twice on the same 702.5s Romanian sample (46.7s, 51.64% WER, 35.28% CER, 4,539 MiB observed device-wide peak). The integrated laptop8 app reached `ready` on the M4A in 123s. A repeated-clip 3,600s input then reached `ready` in 1,143.79s without OOM; minimum free RAM was 2.63 GiB. The soak is not genuine hour-long audio or an accuracy/15-minute qualification.
 
 ## Make configuration switchable
 
@@ -50,7 +50,7 @@ Adapters own native runtime details. Changing a checkpoint supported by an adapt
 
 | Profile | Initial experiment | Scheduling | Qualification |
 |---|---|---|---|
-| `laptop8` | Full Whisper large-v3 via faster-whisper, FP16, beam 5, batch 2; Qwen3.5-4B Q4_K_M | ASR unloads before LLM loads; bounded context | Tested on RTX 3070 Ti Mobile / 8 GB VRAM / 24 GB RAM for one 11m43s Romanian sample; one-hour profile still unqualified |
+| `laptop8` | Full Whisper large-v3 via faster-whisper, FP16, beam 5, batch 2; Qwen3.5-4B Q4_K_M | ASR unloads before LLM loads; bounded context | Tested on RTX 3070 Ti Mobile / 8 GB VRAM / 24 GB RAM for one 11m43s Romanian sample and a repeated-audio 3,600s duration soak; genuine long-meeting quality remains unqualified |
 | `hospital16` | Same models; FP16, beam 5, batch 4; Qwen runtime CUDA 13 | Same sequential stages | Configured for remote RTX 5080 / 16 GB VRAM; actual host is not tested |
 | `cpu` | Smaller/quantized multilingual ASR and compact quantized LLM | Bounded threads/RAM | Functional offline fallback; no 15-minute claim without a run |
 

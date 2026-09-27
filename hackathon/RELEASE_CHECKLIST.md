@@ -10,12 +10,13 @@
 - [x] Transcript edits, bulk replacement, undo, search and source-audio passage seeking are implemented.
 - [x] Approval creates a revisioned, checksummed HTML artifact.
 - [x] Laptop ASR batch 2 passed two identical runs on the same 702.549s Romanian WAV; WER 51.64%, CER 35.28% against the saved machine reference.
-- [x] `python -m pytest services/meeting/tests -q`: 56 passed.
+- [x] `python -m pytest services/meeting/tests evaluation -q`: 61 passed.
 - [x] `npm run test:ui`: 6 passed, including stale setup recovery, mocked provisional words during microphone capture and correction/undo invalidation behavior.
 - [x] `npm run check`: 0 errors/warnings; `npm run build`: passed.
 - [x] `scripts/hackathon/preflight.ps1 -ProfileId laptop8`: passed on this RTX 3070 Ti laptop.
 - [x] One real 20-second Romanian sample window passed through local preview API on the 3070 Ti in 14.42s including request/model setup; temporary audio was removed and VRAM returned to 0 MiB.
 - [x] Laptop8 completed a 3,600-second input soak from repeated authorized challenge audio: app reached `ready` with 143 segments and 9 decision items in 1,143.79s; minimum available RAM 2.63 GiB; peak device-wide GPU use 4,831 MiB. This shows no OOM/interruption on the repeated-audio soak, not a genuine one-hour meeting or semantic accuracy.
+- [x] `scripts/windows-build.ps1 -Task package` produced the Notavra MSI and NSIS installers on Windows.
 
 ## Must remain disclosed as open
 
@@ -25,7 +26,7 @@
 - [ ] Physical microphone recording, permission-loss and user-visible preview-lag behavior on the demo device. Mocked UI plus one real sample-window API test pass, but no ambient/microphone run has been performed.
 - [ ] Human review of Romanian transcription, medical terms, negation, names, numbers and extracted actions. The Microsoft share page was inaccessible; the saved reference is machine-generated.
 - [ ] Integrated real-audio browser/Tauri manual review of search, passage playback, edit, reprocess, approval and artifact download after the latest branch commits.
-- [ ] Packaged release build and fresh-machine install. Tauri dev launch and service health were previously verified; that does not prove packaging.
+- [ ] Install and launch the package on a clean machine. The release installers build successfully; no clean-machine installation has been tested.
 - [ ] Affan confirms his SMTP path can attach the generated file; his delivery implementation is outside this branch.
 
 ## Privacy and release boundary

@@ -2,7 +2,7 @@
 
 **27 September 2026; implementation and benchmark are integrated into `develop`; active continuation is `codex/notavra-finalization`.** The comparison branch contains the app integration, local GPU/memory guards, bounded evidence-linked extraction, and PBI-025/PBI-017 results.
 
-This index supersedes older task order and owner guesses in individual PBIs. PBIs 001–003 and 005–006 are complete; PBI-025's bounded model-selection experiment is complete. The current laptop8 batch-2 app completed a 702.6-second Romanian upload through `ready` in 123.0 seconds, projecting to 10.5 minutes/hour on this sample. A full-hour run is still needed to verify the <=15-minute target. Microphone recording shows provisional Whisper windows while preserving acknowledged source chunks; final processing reuses matching windows and fills gaps from the saved source. Clinician review, 5080 validation and verified email delivery remain open. The benchmark recommends Whisper large-v3 with Romanian selected for this Romanian sample. [The live team handoff](../10-team-handoff.md) contains current branch state and integration boundaries. Affan owns SMTP and delivery acceptance.
+This index supersedes older task order and owner guesses in individual PBIs. PBIs 001–003 and 005–006 are complete; PBI-025's bounded model-selection experiment is complete. The laptop8 app completed a 3,600-second input soak made by repeating the authorized Romanian challenge clip, reaching `ready` in 1,143.79 seconds without OOM or interruption (minimum 2.63 GiB available RAM). This is duration/memory evidence, not a genuine hour-long meeting, quality result, or <=15-minute qualification. The user does not require further speed testing now. Microphone recording shows provisional Whisper windows while preserving acknowledged source chunks; final processing reuses matching windows and fills gaps from the saved source. Clinician review, 5080 validation and verified email delivery remain open. Whisper large-v3 with Romanian selected remains the model choice. [The live team handoff](../10-team-handoff.md) contains current branch state and integration boundaries. Affan owns SMTP and delivery acceptance.
 
 ## Scope and authority
 
@@ -15,7 +15,7 @@ P0 = required today, including user-added patients/live/editing and CEO presenta
 ## Current next work
 
 1. **Rehearse the clinician flow in the UI:** setup/login → patient/meeting → upload or microphone capture with provisional words → local ASR → local decisions → correction/reprocess → approve and download HTML. A real upload/worker run reaches `ready`; manually test UI review, edits, approval and file output. Use only synthetic or explicitly permitted audio.
-2. **Qualify the release claims:** keep Romanian selected for Medpark. PBI-025 reports Whisper vs OmniASR disagreement on the same challenge file, but the Microsoft reference is machine-generated and unverified. Do not report this as clinical WER. Keep the one-hour/15-minute criterion OPEN until a full one-hour local pipeline run is measured.
+2. **Qualify the release claims:** Whisper is selected; the user has declined further model comparison and 15-minute testing. PBI-025 reports disagreement with an unverified machine reference, not clinical accuracy. The repeated-audio hour soak passed without OOM; do not present it as a genuine hour-long meeting or a speed qualification.
 3. **Close remaining P0 integration gaps:** verify Affan can attach the downloaded artifact on his own SMTP path; physically test microphone recording, review/search/replacement and Tauri on the demo laptop; prepare and test WAN-disconnected launch. Email implementation remains Affan's responsibility.
 4. **CEO:** finish the pitch and rehearse, with measured facts only. Security is pass/fail; say clearly that the prototype is local-first but is not GDPR-certified or cleared for real patient data.
 
@@ -30,7 +30,7 @@ The user authorized the current implementation branch to finish frontend and bac
 
 ## Today's gates
 
-Use [the live handoff](../10-team-handoff.md) for the current parallel order. A local model run, fixture renderer or SMTP unit test is not an end-to-end pass. Complete the P0 acceptance gates, measure the one-hour offline path with Affan, and leave any unmet PBI OPEN.
+Use [the live handoff](../10-team-handoff.md) for the current parallel order. A local model run, fixture renderer or SMTP unit test is not an end-to-end pass. The laptop duration soak passed on repeated audio; offline, genuine meeting quality and Affan's delivery remain unverified. Leave unmet PBI acceptance OPEN.
 
 ## Task index
 
@@ -47,7 +47,7 @@ Use [the live handoff](../10-team-handoff.md) for the current parallel order. A 
 | [009 — Extract evidence-backed final decisions locally](PBI-009-local-llm-and-final-decisions.md) | P0 | Sol / High | 001, 003; 004 for audio-to-decisions acceptance | OPEN |
 | [010 — Generate a final document for Affan](PBI-010-final-document-and-artifact-handoff.md) | P0 | Luna / High | 001, 009; fixture rendering can start immediately | OPEN |
 | [011 — Persist live audio and transcribe completed windows](PBI-011-durable-live-audio-backend.md) | P0 | Sol / High | 002, 004, 005 | OPEN |
-| [012 — Record and view live transcripts in the main app](PBI-012-live-recording-ui.md) | P0 | Luna / Medium | 007, 011 | OPEN — preview/reuse implemented; physical microphone and one-hour target performance unverified |
+| [012 — Record and view live transcripts in the main app](PBI-012-live-recording-ui.md) | P0 | Luna / Medium | 007, 011 | OPEN — preview/reuse implemented; physical microphone and genuine long-meeting behavior unverified |
 | [013 — Apply transcript corrections and rebuild dependent output](PBI-013-versioned-transcript-corrections.md) | P0 | Sol / High | 002, 009, 010 | OPEN |
 | [014 — Deliver manual review, audio replay and bulk correction](PBI-014-transcript-review-ui.md) | P0 | Luna / High | 008, 013 | OPEN |
 | [015 — Control local sensitive data and retention](PBI-015-privacy-retention-and-local-data-controls.md) | P0 | Sol / High | 002, 005, 010, 013 | OPEN |
