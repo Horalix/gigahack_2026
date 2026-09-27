@@ -2,7 +2,7 @@
 
 **27 September 2026; implementation and benchmark are integrated into `develop`; active continuation is `codex/notavra-finalization`.** The comparison branch contains the app integration, local GPU/memory guards, bounded evidence-linked extraction, and PBI-025/PBI-017 results.
 
-This index supersedes older task order and owner guesses in individual PBIs. PBIs 001–003 and 005–006 are complete; PBI-025's bounded model-selection experiment is complete. A real Romanian upload has completed ASR and local decision extraction on the laptop; the stage-sum projection is 20.0 minutes/hour, so the 15-minute goal is not met. Clinician review, a one-hour run, 5080 validation and verified email delivery remain open. The benchmark recommends Whisper large-v3 with Romanian selected for this Romanian sample. [The live team handoff](../10-team-handoff.md) contains current branch state and integration boundaries. Affan owns SMTP and delivery acceptance.
+This index supersedes older task order and owner guesses in individual PBIs. PBIs 001–003 and 005–006 are complete; PBI-025's bounded model-selection experiment is complete. A real Romanian upload has completed ASR and local decision extraction on the laptop. Two batch-2 ASR runs plus the earlier LLM stage project to 12.2 minutes/hour by linear stage sum; the full-hour target remains unverified. Clinician review, a one-hour run, 5080 validation and verified email delivery remain open. The benchmark recommends Whisper large-v3 with Romanian selected for this Romanian sample. [The live team handoff](../10-team-handoff.md) contains current branch state and integration boundaries. Affan owns SMTP and delivery acceptance.
 
 ## Scope and authority
 
