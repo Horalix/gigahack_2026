@@ -20,14 +20,29 @@ $pythonCheck = @'
 import os
 from services.meeting.models import resolve_profile, validate_assets
 from services.meeting.storage import Storage
-profile = os.environ["MOM_PROFILE"]
+from services.meeting.api import host_available_memory_gb
+from services.meeting.adapters.llm import _runtime_path
+profile = os.environ['MOM_PROFILE']
 config = resolve_profile(profile_id=profile)
 validate_assets(config)
+runtime = _runtime_path(config['models']['llm'])
+if not runtime.is_file():
+    raise SystemExit('Pinned local LLM runtime is missing at {}. Run scripts/hackathon/prepare-llm-runtime.ps1 for this profile.'.format(runtime))
+if profile != 'cpu':
+    from services.meeting.cuda_runtime import configure_cuda_dll_search
+    ready, issue = configure_cuda_dll_search()
+    if not ready:
+        raise SystemExit('{}. Install services/meeting/requirements.lock or set MOM_CUDA_DLL_PATHS.'.format(issue))
 Storage()
-print(f"Profile {profile}: pinned ASR and LLM files verified; data directory is outside the checkout.")
+ram = host_available_memory_gb()
+print('Profile {}: pinned ASR/LLM files, llama.cpp runtime and CUDA libraries verified; available RAM: {:.1f} GiB.'.format(profile, ram) if ram is not None else 'Profile {}: model assets/runtime verified; available RAM could not be detected.'.format(profile))
 '@
-$checkOutput = & $PythonPath -c $pythonCheck 2>&1
-if ($LASTEXITCODE -ne 0) { throw "Python/model preflight failed:`n$checkOutput" }
+$priorErrorAction = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$checkOutput = @(& $PythonPath -c $pythonCheck 2>&1)
+$pythonExitCode = $LASTEXITCODE
+$ErrorActionPreference = $priorErrorAction
+if ($pythonExitCode -ne 0) { throw "Python/model preflight failed:`n$($checkOutput -join [Environment]::NewLine)" }
 $checkOutput | Write-Output
 
 $gpu = & nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null

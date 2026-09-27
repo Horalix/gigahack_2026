@@ -37,6 +37,13 @@ def transcribe_audio(decoded: Path, asset: dict, config: dict, progress: Callabl
     if not decoded.is_file():
         raise ASRError("DECODED_AUDIO_MISSING", "Decoded audio is missing")
 
+    device = selected.get("device", "cuda")
+    if device == "cuda":
+        from ..cuda_runtime import configure_cuda_dll_search
+        ready, reason = configure_cuda_dll_search()
+        if not ready:
+            raise ASRError("ASR_CUDA_RUNTIME_MISSING", reason or "CUDA libraries are unavailable")
+
     if selected.get("artifacts"):
         from ..models import ModelAssetError, ModelConfigurationError, validate_assets
         try:
@@ -47,7 +54,6 @@ def transcribe_audio(decoded: Path, asset: dict, config: dict, progress: Callabl
     from faster_whisper import BatchedInferencePipeline, WhisperModel
     import ctranslate2
 
-    device = selected.get("device", "cuda")
     try:
         supported = ctranslate2.get_supported_compute_types(device)
     except (RuntimeError, ValueError) as exc:

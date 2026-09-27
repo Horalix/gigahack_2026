@@ -26,11 +26,14 @@ def _runtime_path(model: dict) -> Path:
     configured = os.environ.get("MOM_LLM_SERVER_EXECUTABLE")
     if configured:
         return Path(configured).expanduser().resolve()
+    runtime = model.get("runtime", "cpu")
+    if runtime not in {"cpu", "cuda12", "cuda13"}:
+        raise LLMError("LLM_RUNTIME_NOT_READY", "The selected local LLM runtime is not supported")
     local_app_data = os.environ.get("LOCALAPPDATA")
     name = "llama-server.exe" if os.name == "nt" else "llama-server"
     if local_app_data:
-        return (Path(local_app_data) / "SecureMOM" / "runtimes" / "llama-b11200-cpu" / name).resolve()
-    return (Path(model["model_root"]).parent / "runtimes" / "llama-b11200-cpu" / name).resolve()
+        return (Path(local_app_data) / "SecureMOM" / "runtimes" / f"llama-b11200-{runtime}" / name).resolve()
+    return (Path(model["model_root"]).parent / "runtimes" / f"llama-b11200-{runtime}" / name).resolve()
 
 
 def _extract_json(output: str, required_key: str) -> dict:
@@ -65,8 +68,7 @@ def _response_schema(required_key: str) -> dict:
     elif required_key == "items":
         properties = {"kind": {"type": "string", "enum": ["decision", "action"]}, "text": {"type": "string"},
                       "status": {"type": "string", "enum": ["proposed", "confirmed", "rejected", "cancelled", "unresolved"]},
-                      "ownerText": {"type": ["string", "null"]}, "originalDateExpression": {"type": ["string", "null"]},
-                      "evidence": evidence, "ownerEvidence": evidence, "dateEvidence": evidence}
+                      "eventIndexes": {"type": "array", "items": {"type": "integer", "minimum": 0}}}
         required = list(properties)
     else:
         raise LLMError("LLM_INVALID_OUTPUT", "Unknown local model output schema")
@@ -77,13 +79,6 @@ def _response_schema(required_key: str) -> dict:
             {"if": {"properties": {"ownerText": {"type": "string"}}},
              "then": {"properties": {"ownerEvidence": {"minItems": 1}}}},
             {"if": {"properties": {"dateExpression": {"type": "string"}}},
-             "then": {"properties": {"dateEvidence": {"minItems": 1}}}},
-        ]
-    else:
-        item_schema["allOf"] = [
-            {"if": {"properties": {"ownerText": {"type": "string"}}},
-             "then": {"properties": {"ownerEvidence": {"minItems": 1}}}},
-            {"if": {"properties": {"originalDateExpression": {"type": "string"}}},
              "then": {"properties": {"dateEvidence": {"minItems": 1}}}},
         ]
     return {"type": "object", "additionalProperties": False, "required": [required_key],
@@ -122,9 +117,13 @@ class LocalLLM:
                 "-c", str(int(self.selected["context_size"])),
                 "-ngl", str(int(self.selected.get("gpu_layers", 0)))]
         try:
+            runtime_path = str(executable.parent)
+            environment = os.environ.copy()
+            environment["PATH"] = runtime_path + os.pathsep + environment.get("PATH", "")
             self.process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                             stderr=subprocess.DEVNULL,
-                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                                            env=environment)
         except OSError as exc:
             raise LLMError("LLM_RUNTIME_FAILED", "The local LLM process could not be started") from exc
         deadline = time.monotonic() + self.startup_timeout
@@ -167,13 +166,22 @@ class LocalLLM:
                 payload = json.loads(response.read())
         except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise LLMError("LLM_RUNTIME_FAILED", "The local LLM request failed") from exc
+        finish_reason = "unknown"
+        content_length = 0
         try:
             content = payload["choices"][0]["message"]["content"]
             if not isinstance(content, str):
                 raise TypeError
+            finish_reason = str(payload["choices"][0].get("finish_reason", "unknown"))
+            content_length = len(content)
             return _extract_json(content, required_key)
         except (KeyError, IndexError, TypeError) as exc:
             raise LLMError("LLM_INVALID_OUTPUT", "The local model returned an invalid response") from exc
+        except LLMError as exc:
+            if exc.code == "LLM_INVALID_OUTPUT":
+                raise LLMError("LLM_INVALID_OUTPUT",
+                               f"The local model returned invalid structured output (finish={finish_reason}, chars={content_length})") from exc
+            raise
 
     def close(self) -> None:
         process, self.process = self.process, None

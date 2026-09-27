@@ -108,6 +108,7 @@ def resolve_profile(
             "llm": {
                 "context_size": "MOM_LLM_CONTEXT_SIZE",
                 "max_output_tokens": "MOM_LLM_MAX_OUTPUT_TOKENS",
+                "runtime": "MOM_LLM_RUNTIME",
             },
         }[kind]
         kind_overrides = dict((overrides or {}).get(kind, {}))
@@ -137,6 +138,8 @@ def resolve_profile(
             if result["beam_size"] < 1 or result["beam_size"] > limits["max_asr_beam_size"]:
                 raise ModelConfigurationError("ASR beam_size exceeds profile limits.")
         else:
+            if result.get("runtime", "cpu") not in {"cpu", "cuda12", "cuda13"}:
+                raise ModelConfigurationError("LLM runtime must be cpu, cuda12, or cuda13.")
             if result["context_size"] < 1 or result["context_size"] > limits["max_llm_context_size"]:
                 raise ModelConfigurationError("LLM context_size exceeds profile limits.")
             if result["max_output_tokens"] < 1 or result["max_output_tokens"] > limits["max_llm_output_tokens"]:

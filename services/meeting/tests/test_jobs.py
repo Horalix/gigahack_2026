@@ -22,6 +22,15 @@ def short_wav() -> bytes:
 
 
 def client(tmp_path, monkeypatch) -> TestClient:
+    from services.meeting.adapters import llm
+
+    monkeypatch.setattr("services.meeting.api.host_gpu_memory_gb", lambda: 16.0)
+    monkeypatch.setattr("services.meeting.api.host_gpu_free_memory_gb", lambda: 12.0)
+    monkeypatch.setattr("services.meeting.api.host_available_memory_gb", lambda: 12.0)
+    monkeypatch.setattr("services.meeting.cuda_runtime.configure_cuda_dll_search", lambda: (True, None))
+    runtime = tmp_path / "llama-server.exe"
+    runtime.touch()
+    monkeypatch.setattr(llm, "_runtime_path", lambda _model: runtime)
     app = create_app(tmp_path)
     org_id = app.state.store.installation_organization()
     app.state.auth.create_user(org_id, "test-admin", "correct horse battery staple", "administrator", bootstrap=True)
@@ -92,7 +101,7 @@ def test_duplicate_api_job_start_keeps_one_job(tmp_path, monkeypatch):
     upload = api.post(f"/api/meetings/{meeting_id}/audio",
         files={"file": ("synthetic.wav", short_wav(), "audio/wav")})
     assert upload.status_code == 201, upload.text
-    monkeypatch.setattr(models, "resolve_profile", lambda profile_id, **kwargs: {"profile_id": "laptop8", "models": {"asr": {"path": "synthetic"}}})
+    monkeypatch.setattr(models, "resolve_profile", lambda profile_id, **kwargs: {"profile_id": "laptop8", "models": {"asr": {"path": "synthetic"}, "llm": {"path": "synthetic"}}})
     monkeypatch.setattr(models, "validate_assets", lambda config, kinds: None)
     first = api.post(f"/api/meetings/{meeting_id}/jobs", json={"profileId": "laptop8"})
     second = api.post(f"/api/meetings/{meeting_id}/jobs", json={"profileId": "laptop8"})
@@ -107,23 +116,26 @@ def test_new_job_freezes_selected_model_settings(tmp_path, monkeypatch):
     monkeypatch.setattr(models, "validate_assets", lambda config, kinds: None)
     api = client(tmp_path, monkeypatch)
     meeting_id = meeting(api)
-    def upload_and_start(beam_size):
+    def upload_and_start(beam_size, runtime):
         uploaded = api.post(f"/api/meetings/{meeting_id}/audio",
             files={"file": ("synthetic.wav", short_wav(), "audio/wav")})
         assert uploaded.status_code == 201, uploaded.text
         monkeypatch.setenv("MOM_ASR_BEAM_SIZE", str(beam_size))
+        monkeypatch.setenv("MOM_LLM_RUNTIME", runtime)
         return api.post(f"/api/meetings/{meeting_id}/jobs",
             json={"profileId": "laptop8", "asrModelAlias": "whisper-large-v3-local",
                   "language": "ro" if beam_size == 3 else "auto"})
 
-    first = upload_and_start(3)
-    second = upload_and_start(4)
+    first = upload_and_start(3, "cuda12")
+    second = upload_and_start(4, "cuda13")
     assert first.status_code == second.status_code == 202
     assert first.json()["id"] != second.json()["id"]
     assert first.json()["modelConfig"]["models"]["asr"]["beam_size"] == 3
     assert second.json()["modelConfig"]["models"]["asr"]["beam_size"] == 4
     assert first.json()["modelConfig"]["models"]["asr"]["language"] == "ro"
     assert second.json()["modelConfig"]["models"]["asr"]["language"] == "auto"
+    assert first.json()["modelConfig"]["models"]["llm"]["runtime"] == "cuda12"
+    assert second.json()["modelConfig"]["models"]["llm"]["runtime"] == "cuda13"
     stored = api.get(f"/api/jobs/{first.json()['id']}")
     assert stored.json()["modelConfig"]["models"]["asr"]["beam_size"] == 3
 
@@ -139,6 +151,36 @@ def test_16gb_profile_is_rejected_on_8gb_gpu(tmp_path, monkeypatch):
     response = api.post(f"/api/meetings/{meeting_id}/jobs", json={"profileId": "hospital16"})
     assert response.status_code == 422
     assert response.json()["code"] == "PROFILE_INCOMPATIBLE"
+
+
+def test_low_available_ram_refuses_job_before_queueing(tmp_path, monkeypatch):
+    import services.meeting.api as api_module
+    api = client(tmp_path, monkeypatch)
+    meeting_id = meeting(api)
+    uploaded = api.post(f"/api/meetings/{meeting_id}/audio",
+        files={"file": ("synthetic.wav", short_wav(), "audio/wav")})
+    assert uploaded.status_code == 201
+    monkeypatch.setattr(api_module, "host_available_memory_gb", lambda: 2.5)
+    response = api.post(f"/api/meetings/{meeting_id}/jobs", json={"profileId": "laptop8", "language": "ro"})
+    assert response.status_code == 503
+    assert response.json()["code"] == "SYSTEM_MEMORY_LOW"
+    with api.app.state.store.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM jobs WHERE state = 'queued'").fetchone()[0] == 0
+
+
+def test_low_free_vram_refuses_job_before_queueing(tmp_path, monkeypatch):
+    import services.meeting.api as api_module
+    api = client(tmp_path, monkeypatch)
+    meeting_id = meeting(api)
+    uploaded = api.post(f"/api/meetings/{meeting_id}/audio",
+        files={"file": ("synthetic.wav", short_wav(), "audio/wav")})
+    assert uploaded.status_code == 201
+    monkeypatch.setattr(api_module, "host_gpu_free_memory_gb", lambda: 3.0)
+    response = api.post(f"/api/meetings/{meeting_id}/jobs", json={"profileId": "laptop8", "language": "ro"})
+    assert response.status_code == 503
+    assert response.json()["code"] == "GPU_MEMORY_LOW"
+    with api.app.state.store.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM jobs WHERE state = 'queued'").fetchone()[0] == 0
 
 
 def test_no_audio_and_invalid_source_are_rejected(tmp_path, monkeypatch):

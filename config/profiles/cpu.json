@@ -5,6 +5,7 @@
   "limits": {
     "max_vram_gb": 0,
     "max_system_ram_gb": null,
+    "min_available_ram_gb": 8,
     "max_asr_batch_size": 1,
     "max_asr_beam_size": 10,
     "max_llm_context_size": 4096,
@@ -25,6 +26,7 @@
   "llm": {
     "model_alias": "qwen35-4b-q4km-local",
     "backend": "llama_cpp",
+    "runtime": "cpu",
     "context_size": 4096,
     "max_output_tokens": 1024,
     "chat_template": "embedded",
