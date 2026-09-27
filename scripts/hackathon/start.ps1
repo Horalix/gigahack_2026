@@ -1,8 +1,9 @@
 param(
-    [ValidateSet('Tauri', 'Browser')]
+    [ValidateSet('Tauri', 'Browser', 'Packaged')]
     [string]$Mode = 'Tauri',
     [ValidateSet('laptop8', 'hospital16', 'cpu')]
-    [string]$ProfileId = 'laptop8'
+    [string]$ProfileId = 'laptop8',
+    [string]$AppPath = (Join-Path $PSScriptRoot '../../src-tauri/target/release/feelsay.exe')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,6 +11,11 @@ $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $dataRoot = if ($env:MOM_DATA_DIR) { $env:MOM_DATA_DIR } else { Join-Path $env:LOCALAPPDATA 'SecureMOM' }
 $python = if ($env:MOM_PYTHON) { (Resolve-Path -LiteralPath $env:MOM_PYTHON).Path } else { Join-Path $env:LOCALAPPDATA 'SecureMOM/venv/Scripts/python.exe' }
 . (Join-Path $PSScriptRoot 'preflight.ps1') -ProfileId $ProfileId -PythonPath $python
+$packagedApp = $null
+if ($Mode -eq 'Packaged') {
+    $packagedApp = (Resolve-Path -LiteralPath $AppPath -ErrorAction SilentlyContinue).Path
+    if (!$packagedApp) { throw "Packaged Notavra executable is missing: $AppPath. Build it with scripts/windows-build.ps1 -Task package." }
+}
 
 $runDirectory = Join-Path $dataRoot 'run'
 $logDirectory = Join-Path $dataRoot 'logs'
@@ -82,15 +88,25 @@ try {
     if ($Mode -eq 'Browser') {
         Write-Output 'Opening http://127.0.0.1:1420. Run scripts/hackathon/stop.ps1 to stop owned helpers.'
         Start-Process 'http://127.0.0.1:1420'
-    } else {
+    } elseif ($Mode -eq 'Tauri') {
         Write-Output 'The desktop window is starting. Closing it stops the API and worker.'
         try { & (Join-Path $projectRoot 'scripts/windows-build.ps1') -Task dev }
         finally {
             Stop-OwnedProcesses $records
             Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
         }
+    } else {
+        Write-Output "Starting packaged Notavra from $packagedApp. Close its window to stop the API and worker."
+        $desktop = Start-Process -FilePath $packagedApp -WorkingDirectory $projectRoot -PassThru
+        while (!$desktop.HasExited) {
+            if ($api.HasExited -or $worker.HasExited) { throw 'The local API or worker exited while Notavra was open. Check logs in the local data folder.' }
+            Start-Sleep -Seconds 1
+        }
+        Stop-OwnedProcesses $records
+        Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
     }
 } catch {
+    if ($desktop -and !$desktop.HasExited) { Stop-Process -Id $desktop.Id -Force -ErrorAction SilentlyContinue }
     Stop-OwnedProcesses $records
     Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
     throw

@@ -33,6 +33,15 @@ powershell -ExecutionPolicy Bypass -File scripts/hackathon/start.ps1 -Mode Brows
 powershell -ExecutionPolicy Bypass -File scripts/hackathon/stop.ps1
 ```
 
+Build the Windows installers, then launch the packaged Tauri UI with the local API and worker using:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/windows-build.ps1 -Task package
+powershell -ExecutionPolicy Bypass -File scripts/hackathon/start.ps1 -Mode Packaged -ProfileId laptop8
+```
+
+This launches `src-tauri/target/release/feelsay.exe` with the prepared local service/model assets. Close the app window to stop the API and worker. To use an already installed executable, pass its path with `-AppPath`.
+
 5080 workstation / 16 GB, run on that machine:
 
 ```powershell
@@ -45,7 +54,7 @@ Sign in or create the first installation administrator, create a meeting, then u
 
 ## Offline and performance claims
 
-Run preflight while connected once, then disconnect WAN and repeat a complete demo with an allowed synthetic/consented recording. This runbook does not assert that offline egress, the 5080 profile, a one-hour recording, or the 15-minute end-to-end target has passed. Record cold/warm stage times, peak RAM/VRAM and the exact model files for any competition claim. Whisper vs OmniASR results and limitations are in [ASR comparison](ASR_COMPARISON_RESULTS.md).
+Run preflight while connected once, then disconnect WAN and repeat a complete demo with an allowed synthetic/consented recording. A repeated-clip 3,600-second laptop8 soak reached `ready` without OOM/interruption; this is not a genuine one-hour meeting or offline/egress verification. The 5080 host and the 15-minute competition target are also unverified. The user does not require further speed testing. Record model files and configuration for any competition claim. Whisper vs OmniASR results and limitations are in [ASR comparison](ASR_COMPARISON_RESULTS.md).
 
 ## Local files and logs
 
