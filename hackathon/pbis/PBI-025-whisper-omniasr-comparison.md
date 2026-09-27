@@ -1,7 +1,7 @@
 # PBI-025: Reproduce a fair Whisper versus OmniASR comparison
 
 Parent: `hackathon/pbis/README.md` — Core inference / evaluation epic  
-Status: OPEN — planned, no OmniASR run performed  
+Status: OPEN — laptop runs complete; repeat and matched timing controls remain
 Priority: P0 — bounded model-selection experiment  
 Owner: Core/backend developer; CEO may verify reference passages  
 Recommended model: **GPT-6 Luna**  
@@ -162,12 +162,13 @@ The standard Omni pipeline returns strings, not word timings. Store only known c
 
 ## Completion record
 
-- Commit / changed files: pending
-- Runtime preparation and reproducible commands: pending
-- Attempted/completed/failed model runs: pending
-- Source/reference hashes and local report paths: pending
-- Accuracy, speed, memory and human-review limitations: pending
-- Recommendation and follow-up under 004/017: pending
+- Commit / changed files: see the benchmark branch commit; added `evaluation/asr_compare.py`, `evaluation/asr_compare_worker.py`, `evaluation/run_whisper_native.py`, tests and `hackathon/ASR_COMPARISON_RESULTS.md`.
+- Runtime preparation: private WSL Python 3.12 environment with Torch 2.8.0+cu128, fairseq2 0.6 and OmniASR; no environment files, model weights, audio, reference text or raw hypotheses are in Git. Evaluation helper tests pass (`python -m pytest evaluation/test_asr_compare.py -q`: 2 passed).
+- Completed on laptop: app-native Whisper large-v3 Romanian forced, OmniASR CTC 1B v2, and OmniASR LLM 1B v2 Romanian-conditioned. Whisper common-window WSL comparison was attempted but stopped after >12 minutes without completion. The 16 GB host was inaccessible; repeated clean trials were not run.
+- Input/reference: private local WAV SHA-256 `6c8bdc04676470b02b20f77c5c5a0d2dc3ed7b213fdafffc9b5e44a2d9a81b62`; saved reference SHA-256 `49ef9ec13d9f70e181bf171d421db4e30598e74b28c285a2a9c22ccf57242eb5`.
+- Measured WER/CER versus the unverified Microsoft machine reference: Whisper 47.9%/29.9%, Omni CTC 72.6%/52.6%, Omni LLM Romanian 66.9%/46.4%. See `hackathon/ASR_COMPARISON_RESULTS.md` for timing, hardware, setup and limitations.
+- Decision: retain Whisper as the app model; Omni's CTC speed does not offset the error increase, and Omni LLM is slower than the ASR budget. These are one-recording disagreement results, not clinical accuracy.
+- Remaining acceptance: no repeat runs, no matched completed Whisper/Omni common-window run, no 16 GB result, and no human-reviewed reference/critical-term score. PBI remains OPEN for these controls; the recommendation is already actionable for the current demo.
 
 ## Copy-paste executor prompt
 
