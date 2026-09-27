@@ -42,7 +42,7 @@ powershell -ExecutionPolicy Bypass -File scripts/windows-build.ps1 -Task package
 powershell -ExecutionPolicy Bypass -File scripts/hackathon/start.ps1 -Mode Packaged -ProfileId laptop8
 ```
 
-This launches `src-tauri/target/release/feelsay.exe` with the prepared local service/model assets. Close the app window to stop the API and worker. To use an already installed executable, pass its path with `-AppPath`.
+This launches `src-tauri/target/release/feelsay.exe` with the prepared local service/model assets. Packaged mode requires the `build/index.html` static UI output but does not require Node, npm or Vite at launch. Close the app window to stop the API and worker. To use an already installed executable, pass its path with `-AppPath`.
 
 5080 workstation / 16 GB, run on that machine:
 

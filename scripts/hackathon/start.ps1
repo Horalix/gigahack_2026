@@ -10,11 +10,14 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $dataRoot = if ($env:MOM_DATA_DIR) { $env:MOM_DATA_DIR } else { Join-Path $env:LOCALAPPDATA 'SecureMOM' }
 $python = if ($env:MOM_PYTHON) { (Resolve-Path -LiteralPath $env:MOM_PYTHON).Path } else { Join-Path $env:LOCALAPPDATA 'SecureMOM/venv/Scripts/python.exe' }
-. (Join-Path $PSScriptRoot 'preflight.ps1') -ProfileId $ProfileId -PythonPath $python
+. (Join-Path $PSScriptRoot 'preflight.ps1') -Mode $Mode -ProfileId $ProfileId -PythonPath $python
 $packagedApp = $null
 if ($Mode -eq 'Packaged') {
     $packagedApp = (Resolve-Path -LiteralPath $AppPath -ErrorAction SilentlyContinue).Path
     if (!$packagedApp) { throw "Packaged Notavra executable is missing: $AppPath. Build it with scripts/windows-build.ps1 -Task package." }
+    if (!(Test-Path -LiteralPath (Join-Path $projectRoot 'build/index.html'))) {
+        throw 'Packaged UI assets are missing. Run npm run build before disconnecting from the internet.'
+    }
 }
 
 $runDirectory = Join-Path $dataRoot 'run'
@@ -44,7 +47,7 @@ function Stop-OwnedProcesses($Records) {
 Assert-FreePort 8000
 if ($Mode -eq 'Browser') { Assert-FreePort 1420 }
 $records = [System.Collections.Generic.List[object]]::new()
-$node = (Get-Command node).Source
+$node = if ($Mode -eq 'Browser') { (Get-Command node).Source } else { $null }
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 
 try {

@@ -1,4 +1,6 @@
 param(
+    [ValidateSet('Tauri', 'Browser', 'Packaged')]
+    [string]$Mode = 'Tauri',
     [ValidateSet('laptop8', 'hospital16', 'cpu')]
     [string]$ProfileId = 'laptop8',
     [string]$PythonPath = (Join-Path $env:LOCALAPPDATA 'SecureMOM/venv/Scripts/python.exe')
@@ -8,11 +10,16 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $env:MOM_PROFILE = $ProfileId
 
-foreach ($tool in @('node', 'npm', 'ffmpeg', 'ffprobe')) {
+foreach ($tool in @('ffmpeg', 'ffprobe')) {
     if (!(Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Required local tool is missing: $tool" }
 }
+if ($Mode -ne 'Packaged') {
+    foreach ($tool in @('node', 'npm')) {
+        if (!(Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Required local tool is missing for $Mode mode: $tool" }
+    }
+}
 if (!(Test-Path -LiteralPath $PythonPath)) { throw "Prepared Python environment is missing: $PythonPath. Create it and install services/meeting/requirements.lock as described in hackathon/RUNBOOK.md." }
-if (!(Test-Path -LiteralPath (Join-Path $projectRoot 'node_modules/vite/bin/vite.js'))) {
+if ($Mode -ne 'Packaged' -and !(Test-Path -LiteralPath (Join-Path $projectRoot 'node_modules/vite/bin/vite.js'))) {
     throw 'Node dependencies are missing. Run npm ci from the repository root.'
 }
 
