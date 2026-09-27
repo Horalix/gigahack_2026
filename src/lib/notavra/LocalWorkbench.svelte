@@ -7,7 +7,7 @@
   type Patient = { id: string; displayName: string; hospitalReference: string | null; status: string; meetings?: { id: string; title: string; recordedAt: string; status: string }[] };
   type Capture = { id: string; state: string; next_sequence: number; received_bytes: number; error_code?: string | null };
   type Profile = { id: string; hardware: { gpu: string; vram_gb: number }; asrFilesPresent: boolean; llmFilePresent: boolean; compatible: boolean };
-  type Detail = { meeting: Meeting; permission: string; asset: { durationMs: number; decodeWarning?: string } | null; segments: Segment[]; decisions: any; canUndoCorrection: boolean; captures: Capture[]; artifact: { id: string; sha256: string; approvedAt: string; storageKey: string } | null };
+  type Detail = { meeting: Meeting; permission: string; asset: { durationMs: number; decodeWarning?: string } | null; latestJob?: { id: string; state: string; stage: string; errorCode?: string | null } | null; segments: Segment[]; decisions: any; canUndoCorrection: boolean; captures: Capture[]; artifact: { id: string; sha256: string; approvedAt: string; storageKey: string } | null };
 
   let user = $state<User | null>(null);
   let setupRequired = $state(false);
@@ -319,6 +319,15 @@
     } catch (e) { error = e instanceof Error ? e.message : "Processing could not start"; status = ""; busy = false; }
   }
 
+  async function retryFailedJob() {
+    if (!detail?.latestJob || detail.latestJob.state !== "failed") return;
+    busy = true; error = ""; status = "Retrying the failed local processing step…";
+    try {
+      const job = await request<{ id: string }>(`/jobs/${detail.latestJob.id}/retry`, { method: "POST" });
+      watchJob(job.id);
+    } catch (e) { error = e instanceof Error ? e.message : "The failed step could not be retried"; status = ""; busy = false; }
+  }
+
   async function startRecording() {
     if (!detail) return;
     error = ""; captureFailure = ""; captureWarning = ""; nextCaptureSequence = 0; pendingChunkUploads = 0; chunkUpload = Promise.resolve(); recordingSeconds = 0;
@@ -420,7 +429,7 @@
         status = job.state === "ready" ? "Transcript and decisions are ready for review." : job.state === "failed" ? `Processing failed: ${job.errorCode || "unknown error"}` : `${job.stage}: ${job.state}…`;
         if (job.state === "ready" || job.state === "failed") {
           stopPolling(); busy = false;
-          if (job.state === "ready" && detail) await openMeeting(detail.meeting.id);
+          if (detail) await openMeeting(detail.meeting.id);
           await loadMeetings();
         }
       } catch (e) { status = e instanceof Error ? e.message : "Lost connection to the local service"; stopPolling(); busy = false; }
@@ -491,6 +500,7 @@
           {#if detail.decisions}<section class="panel"><h2>Decisions and actions <span>human review required</span></h2>{#if detail.decisions.items?.length}{#each detail.decisions.items as item (item.id)}<article class="action-card"><div class="action-title"><span class="action-kind">{item.kind}</span><span class="action-state">{item.status}</span><b>{item.text}</b></div><div class="action-meta">{#if item.ownerLabel}<span>Owner: {item.ownerLabel}</span>{/if}{#if item.originalDateExpression}<span>Due: {item.originalDateExpression}</span>{/if}</div>{#each item.taskEvidence as evidence (evidence.segmentId + evidence.startMs)}<blockquote><time>{formatTime(evidence.startMs)}</time>“{evidence.quote}”</blockquote>{/each}</article>{/each}{:else}<p>No decisions or follow-up actions were identified.</p>{/if}<small class="review-note">Suggested by local AI and backed by transcript excerpts. Confirm or correct before use.</small></section>{/if}
           {#if detail.artifact}<p class="status">Current approved file · revision {detail.meeting.transcriptRevision} · SHA-256 {detail.artifact.sha256} · <a href={`/api/artifacts/${detail.artifact.id}/content`}>Download again</a></p>{/if}
           {#if detail.decisions && user.role !== "reviewer"}<section class="panel"><label class="approval"><input type="checkbox" bind:checked={reviewConfirmed} /> I reviewed the transcript and every suggested decision/action above.</label><button class="primary" disabled={!reviewConfirmed} onclick={approveAndDownload}>Approve and download HTML minutes</button><p class="muted">This creates a local, self-contained file for the current transcript revision. Corrections supersede it.</p></section>{/if}
+          {#if detail.asset && detail.latestJob?.state === "failed" && user.role !== "reviewer"}<section class="panel"><p>Local processing stopped at {detail.latestJob.stage} ({detail.latestJob.errorCode || "unknown error"}). Retry resumes from the saved checkpoint when available.</p><button class="primary" disabled={busy} onclick={retryFailedJob}>Retry failed step</button></section>{/if}
           {#if detail.asset && !detail.decisions && user.role !== "reviewer"}<section class="panel"><p>The transcript changed or decision extraction is not ready. Re-run processing from the saved audio before approving minutes.</p><button class="primary" disabled={busy} onclick={reprocessSavedAudio}>Reprocess saved audio locally</button></section>{/if}
           {#if !detail.segments.length}<div class="empty"><span>01</span><h2>Upload the recording</h2><p>Notavra processes the audio locally, then shows the transcript and evidence-backed actions here.</p></div>{/if}
         {:else}<div class="empty"><span>01</span><h1>Clinical meetings, ready to review</h1><p>Choose a meeting, or start one and upload its audio. Transcription and action extraction run locally on the selected profile.</p></div>{/if}

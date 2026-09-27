@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 
-/** @param {import('@playwright/test').Page} page @param {{ setupRequired?: boolean }} [options] */
-async function installApi(page, { setupRequired = true } = {}) {
+/** @param {import('@playwright/test').Page} page @param {{ setupRequired?: boolean, failedJob?: boolean }} [options] */
+async function installApi(page, { setupRequired = true, failedJob = false } = {}) {
   let needsSetup = setupRequired;
   let patients = setupRequired ? [] : [
     { id: "patient-1", displayName: "Mira Popescu", hospitalReference: "DEMO-001", status: "active", meetings: [] },
@@ -11,6 +11,7 @@ async function installApi(page, { setupRequired = true } = {}) {
   let meeting = null;
   let uploaded = false;
   let approved = false;
+  let jobState = failedJob ? "failed" : "ready";
   const user = { id: "user-1", username: "doctor", role: "administrator" };
   const segment = { id: "seg-1", startMs: 1000, endMs: 3000, text: "Pacientul va reveni luni.", language: "ro" };
   const decision = {
@@ -27,7 +28,8 @@ async function installApi(page, { setupRequired = true } = {}) {
     meeting: { ...meeting, status: uploaded ? "transcript_ready" : "created", transcriptRevision: uploaded ? 1 : 0 },
     permission: "owner", asset: uploaded ? { durationMs: 60_000 } : null,
     segments: uploaded ? [segment] : [],
-    decisions: uploaded ? { items: [decision], requiresHumanReview: true } : null,
+    latestJob: uploaded ? { id: "job-1", state: jobState, stage: jobState === "failed" ? "extract" : "complete", errorCode: jobState === "failed" ? "LLM_INVALID_EVIDENCE" : null } : null,
+    decisions: uploaded && jobState === "ready" ? { items: [decision], requiresHumanReview: true } : null,
     canUndoCorrection: false, captures: [],
     artifact: approved ? { id: "artifact-1", sha256: "abc123", approvedAt: new Date().toISOString(), storageKey: "artifact.html" } : null,
   });
@@ -70,7 +72,8 @@ async function installApi(page, { setupRequired = true } = {}) {
       return json({ id: "asset-1" }, 201);
     }
     if (path === "/meetings/meeting-1/jobs" && method === "POST") return json({ id: "job-1" }, 202);
-    if (path === "/jobs/job-1") return json({ id: "job-1", state: "ready", stage: "complete", progressMs: 60_000 });
+    if (path === "/jobs/job-1/retry" && method === "POST") { jobState = "ready"; return json({ id: "job-1", state: "queued", stage: "extract" }, 202); }
+    if (path === "/jobs/job-1") return json({ id: "job-1", state: jobState, stage: jobState === "failed" ? "extract" : "complete", errorCode: jobState === "failed" ? "LLM_INVALID_EVIDENCE" : null, progressMs: 60_000 });
     if (path === "/meetings/meeting-1" && method === "GET") return json(detail());
     if (path === "/meetings/meeting-1/artifacts" && method === "POST") { approved = true; return json({ artifact: { id: "artifact-1" } }, 201); }
     if (path === "/artifacts/artifact-1/content") return route.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><title>Approved Notavra minutes</title>" });
@@ -126,4 +129,23 @@ test("existing doctor can search and page through the patient directory", async 
   await page.getByLabel("Search patients").fill("Mira");
   await expect(page.getByText("Mira Popescu")).toBeVisible();
   await expect(page.getByText("Radu Ionescu")).toHaveCount(0);
+});
+
+/** @param {{ page: import('@playwright/test').Page }} fixtures */
+test("doctor can retry a failed local extraction from the meeting", async ({ page }) => {
+  await installApi(page, { failedJob: true });
+  await page.goto("/");
+  await page.getByLabel("Username").fill("doctor");
+  await page.getByLabel("Password").fill("correct horse battery staple");
+  await page.getByRole("button", { name: "Create administrator" }).click();
+  await page.getByLabel("Meeting title").fill("Retry extraction");
+  await page.getByRole("button", { name: "Create meeting" }).click();
+  await page.locator('input[name="audio"]').setInputFiles({ name: "sample.wav", mimeType: "audio/wav", buffer: Buffer.from("sample") });
+  await page.getByRole("button", { name: "Transcribe recording" }).click();
+  await expect(page.getByText(/Processing failed:/)).toBeVisible({ timeout: 10_000 });
+  const retry = page.getByRole("button", { name: "Retry failed step" });
+  await expect(retry).toBeVisible();
+  await retry.click();
+  await expect(page.getByText("Transcript and decisions are ready for review.")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Pacientul va reveni luni.").first()).toBeVisible();
 });
