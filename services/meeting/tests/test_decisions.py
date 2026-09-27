@@ -40,9 +40,8 @@ def test_extracts_validated_evidence_and_keeps_all_six_operations(tmp_path):
                                 "ownerText": None, "dateExpression": None,
                                 "evidence": [evidence(segment)], "ownerEvidence": [], "dateEvidence": []}
                                for operation, segment in zip(operations, segments)]}
-        return {"items": [{"kind": "action", "text": segment["text"], "status": status,
-                            "eventIndexes": [index]}
-                           for index, (segment, status) in enumerate(zip(segments, ["proposed", "confirmed", "confirmed", "rejected", "cancelled", "unresolved"]))]}
+        return {"items": [{"status": status, "eventIndexes": [index], "textEventIndex": index}
+                           for index, (_segment, status) in enumerate(zip(segments, ["proposed", "confirmed", "confirmed", "rejected", "cancelled", "unresolved"]))]}
 
     result = extract_decisions(segments, meeting, job, tmp_path, generator=generator)
     assert [item["status"] for item in result["items"]] == [
@@ -86,8 +85,7 @@ def test_retries_invalid_evidence_once_then_accepts_exact_quote(tmp_path):
                                 "ownerText": None, "dateExpression": None,
                                 "evidence": [{"segmentId": "segment-0", "quote": quote}],
                                 "ownerEvidence": [], "dateEvidence": []}]}
-        return {"items": [{"kind": "action", "text": "Cancel scan", "status": "cancelled",
-                            "eventIndexes": [0]}]}
+        return {"items": [{"status": "cancelled", "eventIndexes": [0], "textEventIndex": 0}]}
 
     result = extract_decisions(segments, meeting, job, tmp_path, generator=generator)
     assert result["items"][0]["status"] == "cancelled"
@@ -103,8 +101,7 @@ def test_final_reconciliation_cannot_reference_unknown_event(tmp_path):
             return {"events": [{"operation": "cancellation", "kind": "action", "text": "Cancel scan",
                                 "ownerText": None, "dateExpression": None,
                                 "evidence": [evidence(segments[0])], "ownerEvidence": [], "dateEvidence": []}]}
-        return {"items": [{"kind": "action", "text": "Cancel scan", "status": "cancelled",
-                            "eventIndexes": [1]}]}
+        return {"items": [{"status": "cancelled", "eventIndexes": [1], "textEventIndex": 1}]}
 
     with pytest.raises(LLMError, match="unknown candidate event"):
         extract_decisions(segments, meeting, job, tmp_path, generator=generator)
@@ -119,8 +116,7 @@ def test_retains_relative_date_expression_without_guessing_absolute_timestamp(tm
                                 "ownerText": None, "dateExpression": "next Monday",
                                 "evidence": [evidence(segments[0])], "ownerEvidence": [],
                                 "dateEvidence": [evidence(segments[0])]}]}
-        return {"items": [{"kind": "action", "text": "Repeat the test", "status": "proposed",
-                            "eventIndexes": [0]}]}
+        return {"items": [{"status": "proposed", "eventIndexes": [0], "textEventIndex": 0}]}
 
     result = extract_decisions(segments, meeting, job, tmp_path, generator=generator)
     assert result["items"][0]["originalDateExpression"] == "next Monday"
@@ -138,8 +134,7 @@ def test_recovers_literal_weekday_but_keeps_ambiguous_owner_unknown(tmp_path):
                                 "text": "Call the patient", "ownerText": "Dr. Popescu will call the patient",
                                 "dateExpression": None, "evidence": [quote],
                                 "ownerEvidence": [quote], "dateEvidence": []}]}
-        return {"items": [{"kind": "action", "text": "Call the patient", "status": "confirmed",
-                            "eventIndexes": [0]}]}
+        return {"items": [{"status": "confirmed", "eventIndexes": [0], "textEventIndex": 0}]}
 
     item = extract_decisions(segments, meeting, job, tmp_path, generator=generator)["items"][0]
     assert item["ownerLabel"] is None
@@ -160,8 +155,8 @@ def test_explicit_future_commitment_beats_a_model_proposal_but_suggestion_does_n
                                 "ownerText": None, "dateExpression": None,
                                 "evidence": [evidence(segment)], "ownerEvidence": [], "dateEvidence": []}
                                for segment in segments]}
-        return {"items": [{"kind": "action", "text": segment["text"], "status": "proposed",
-                            "eventIndexes": [index]} for index, segment in enumerate(segments)]}
+        return {"items": [{"status": "proposed", "eventIndexes": [index], "textEventIndex": index}
+                           for index, _segment in enumerate(segments)]}
 
     items = extract_decisions(segments, meeting, job, tmp_path, generator=generator)["items"]
     assert items[0]["status"] == "confirmed"

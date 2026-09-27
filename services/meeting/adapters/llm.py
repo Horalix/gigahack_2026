@@ -66,9 +66,10 @@ def _response_schema(required_key: str) -> dict:
                       "ownerEvidence": evidence, "dateEvidence": evidence}
         required = list(properties)
     elif required_key == "items":
-        properties = {"kind": {"type": "string", "enum": ["decision", "action"]}, "text": {"type": "string"},
-                      "status": {"type": "string", "enum": ["proposed", "confirmed", "rejected", "cancelled", "unresolved"]},
-                      "eventIndexes": {"type": "array", "items": {"type": "integer", "minimum": 0}}}
+        properties = {"status": {"type": "string", "enum": ["proposed", "confirmed", "rejected", "cancelled", "unresolved"]},
+                      "eventIndexes": {"type": "array", "minItems": 1, "maxItems": 120,
+                                       "items": {"type": "integer", "minimum": 0}},
+                      "textEventIndex": {"type": "integer", "minimum": 0}}
         required = list(properties)
     else:
         raise LLMError("LLM_INVALID_OUTPUT", "Unknown local model output schema")
@@ -81,8 +82,11 @@ def _response_schema(required_key: str) -> dict:
             {"if": {"properties": {"dateExpression": {"type": "string"}}},
              "then": {"properties": {"dateEvidence": {"minItems": 1}}}},
         ]
+    result_items = {"type": "array", "items": item_schema}
+    if required_key == "items":
+        result_items["maxItems"] = 120
     return {"type": "object", "additionalProperties": False, "required": [required_key],
-            "properties": {required_key: {"type": "array", "items": item_schema}}}
+            "properties": {required_key: result_items}}
 
 
 class LocalLLM:
