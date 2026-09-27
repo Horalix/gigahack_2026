@@ -1,0 +1,10 @@
+{
+  "criticalTerms": [
+    {"id": "vasopressor", "canonical": "noradrenalină", "aliases": ["noradrenalina"], "expectedCount": 1},
+    {"id": "not-mentioned", "canonical": "hipotermie", "expectedCount": 0}
+  ],
+  "items": [
+    {"id": "repeat-test", "phrases": ["va repeta testul", "repetați testul"], "owner": "Dr Popescu", "date": "mâine"},
+    {"id": "schedule-echo", "phrases": ["programați ecografia"], "owner": null, "date": null}
+  ]
+}
