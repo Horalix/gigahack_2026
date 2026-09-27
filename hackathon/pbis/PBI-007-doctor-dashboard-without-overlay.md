@@ -45,5 +45,6 @@ Native renderer cleanup, medical advice panels, polished charts, changing app fr
 - Commit / changed files: `00a5730`, `dee5f4c`; replaced the caption landing route with the authenticated Notavra local workbench, searchable meetings, patient directory, patient details and meeting links.
 - Commands and observed behavior: Python service tests include 1,005 synthetic patient rows, diacritics/Cyrillic and keyset pagination; browser smoke created a patient and linked meeting; Svelte check/build pass.
 - Acceptance evidence / limitations: dashboard/API slices work and ordinary browser mode needs no Tauri IPC. Browser verification covers patient creation/linking, but not every paginated UI state or full Tauri launch; C++/LLVM prerequisites are missing on this laptop. Keep PBI OPEN pending the full doctor journey smoke.
+- Follow-up 2026-09-27: a stale first-run setup page now detects that another request already created the administrator and switches to sign-in. The Playwright regression verifies the existing account can then sign in. Full UI suite: 6 passed.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
 

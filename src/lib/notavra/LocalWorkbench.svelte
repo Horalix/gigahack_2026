@@ -113,7 +113,22 @@
       setupRequired = false;
       password = "";
       await Promise.all([loadMeetings(), loadProfiles()]);
-    } catch (e) { error = e instanceof Error ? e.message : "Sign in failed"; }
+    } catch (e) {
+      if (setupRequired) {
+        try {
+          const health = await request<{ setupRequired: boolean }>("/health");
+          if (!health.setupRequired) {
+            setupRequired = false;
+            password = "";
+            error = "An administrator already exists. Sign in with the existing account.";
+            return;
+          }
+        } catch {
+          // Keep the original setup error if the service cannot confirm its state.
+        }
+      }
+      error = e instanceof Error ? e.message : "Sign in failed";
+    }
   }
 
   async function loadMeetings() {

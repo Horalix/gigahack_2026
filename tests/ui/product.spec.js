@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 
-/** @param {import('@playwright/test').Page} page @param {{ setupRequired?: boolean, failedJob?: boolean }} [options] */
-async function installApi(page, { setupRequired = true, failedJob = false } = {}) {
+/** @param {import('@playwright/test').Page} page @param {{ setupRequired?: boolean, failedJob?: boolean, setupConflict?: boolean }} [options] */
+async function installApi(page, { setupRequired = true, failedJob = false, setupConflict = false } = {}) {
   let needsSetup = setupRequired;
   let patients = setupRequired ? [] : [
     { id: "patient-1", displayName: "Mira Popescu", hospitalReference: "DEMO-001", status: "active", meetings: [] },
@@ -46,7 +46,10 @@ async function installApi(page, { setupRequired = true, failedJob = false } = {}
     const json = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
 
     if (path === "/health") return json({ setupRequired: needsSetup });
-    if (path === "/auth/setup" && method === "POST") { needsSetup = false; return json({ user }); }
+    if (path === "/auth/setup" && method === "POST") {
+      if (setupConflict) { needsSetup = false; return json({ code: "SETUP_COMPLETE", message: "An administrator account already exists" }, 409); }
+      needsSetup = false; return json({ user });
+    }
     if (path === "/auth/login" && method === "POST") return json({ user });
     if (path === "/auth/me") return json({ user });
     if (path === "/auth/logout" && method === "POST") return json({ ok: true });
@@ -98,6 +101,21 @@ async function installApi(page, { setupRequired = true, failedJob = false } = {}
     return json({ code: "UNEXPECTED_FIXTURE_ROUTE", message: `${method} ${path}` }, 500);
   });
 }
+
+test("stale setup page switches to sign-in when another admin already exists", async ({ page }) => {
+  await installApi(page, { setupConflict: true });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Set up your local workspace" })).toBeVisible();
+  await page.getByLabel("Username").fill("doctor");
+  await page.getByLabel("Password").fill("correct horse battery staple");
+  await page.getByRole("button", { name: "Create administrator" }).click();
+  await expect(page.getByRole("heading", { name: "Sign in to Notavra" })).toBeVisible();
+  await expect(page.getByText("An administrator already exists. Sign in with the existing account.")).toBeVisible();
+  await page.getByLabel("Username").fill("doctor");
+  await page.getByLabel("Password").fill("correct horse battery staple");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("heading", { name: "Clinical meetings, ready to review" })).toBeVisible();
+});
 
 /** @param {{ page: import('@playwright/test').Page }} fixtures */
 test("doctor can upload, review and approve a local transcript", async ({ page }) => {

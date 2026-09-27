@@ -11,7 +11,7 @@
 - [x] Approval creates a revisioned, checksummed HTML artifact.
 - [x] Laptop ASR batch 2 passed two identical runs on the same 702.549s Romanian WAV; WER 51.64%, CER 35.28% against the saved machine reference.
 - [x] `python -m pytest services/meeting/tests -q`: 54 passed.
-- [x] `npm run test:ui`: 5 passed, including mocked provisional words during microphone capture and correction/undo invalidation behavior.
+- [x] `npm run test:ui`: 6 passed, including stale setup recovery, mocked provisional words during microphone capture and correction/undo invalidation behavior.
 - [x] `npm run check`: 0 errors/warnings; `npm run build`: passed.
 - [x] `scripts/hackathon/preflight.ps1 -ProfileId laptop8`: passed on this RTX 3070 Ti laptop.
 - [x] One real 20-second Romanian sample window passed through local preview API on the 3070 Ti in 14.42s including request/model setup; temporary audio was removed and VRAM returned to 0 MiB.
