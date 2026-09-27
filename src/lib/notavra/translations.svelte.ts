@@ -1,7 +1,9 @@
 import type { Lang } from './i18n';
+import { localRows } from './translations.local';
 // Ported from the Notavra web app. Rows below are copied verbatim.
-// Only change: the UI language is Svelte state, so markup calling tr()
-// re-renders when the language switches.
+// Changes: the UI language is Svelte state, so markup calling tr()
+// re-renders when the language switches; rows from translations.local.ts
+// (text added on top of Notavra) are looked up too.
 export const ui=$state<{lang:Lang}>({lang:'en'});
 export function setUiLanguage(value:Lang){ui.lang=value;document.documentElement.lang=value;}
 const rows:[string,string,string][]=[
@@ -293,6 +295,6 @@ const rows:[string,string,string][]=[
  ["Admin access required to edit templates.", "Pentru editarea șabloanelor este necesar acces de administrator.", "Для редактирования шаблонов нужны права администратора."],
  ["Template version","Versiunea șablonului","Версия шаблона"]
 ];
-const lookup=new Map(rows.map(([en,ro,ru])=>[en,{en,ro,ru}]));
+const lookup=new Map([...rows,...localRows].map(([en,ro,ru])=>[en,{en,ro,ru}]));
 export function tr(text:string):string {const key=text.trim();const translated=lookup.get(key)?.[ui.lang]||key;return (text.startsWith(' ')?' ':'')+translated+(text.endsWith(' ')?' ':'');}
 export const translatedKeys=[...lookup.keys()];

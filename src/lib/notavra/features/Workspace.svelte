@@ -1,10 +1,13 @@
 <script lang="ts">
-  // Port of features/Workspace.tsx.
+  // Port of features/Workspace.tsx, plus the start-to-email flow card:
+  // new audio is processed without a separate click, and the card carries the
+  // meeting from recording or upload to one "Approve & send".
   import { ChevronDown, Settings2 } from "@lucide/svelte";
+  import { tick, untrack } from "svelte";
   import { errorMessage } from "../errors";
   import { api, type Job, type Meeting } from "../api";
   import type { Labels } from "../i18n";
-  import { createQuery, invalidateQueries } from "../query.svelte";
+  import { createQuery, invalidateQueries, type Query } from "../query.svelte";
   import { tr } from "../translations.svelte";
   import AudioChecks from "./AudioChecks.svelte";
   import CandidateHistory from "./CandidateHistory.svelte";
@@ -13,12 +16,21 @@
   import MeetingAudio from "./MeetingAudio.svelte";
   import { createMeetingAudio } from "./meetingAudioState.svelte";
   import MeetingDetails from "./MeetingDetails.svelte";
+  import MeetingFlow from "./MeetingFlow.svelte";
+  import type { Intent } from "./flow";
   import Recorder from "./Recorder.svelte";
   import Snapshot from "./Snapshot.svelte";
   import TranscriptExperience, { loadTranscript } from "./TranscriptExperience.svelte";
   import { activeSegment, speakerIndex, speakerPalette, timeLabel, type SpeechSegment } from "./transcriptModel";
 
-  let { id, t, back, role }: { id: string; t: Labels; back: () => void; role: string } = $props();
+  let {
+    id,
+    t,
+    back,
+    role,
+    intent,
+    intentDone,
+  }: { id: string; t: Labels; back: () => void; role: string; intent?: Intent; intentDone?: () => void } = $props();
 
   const OPTIONAL = ["parakeet", "diarization"] as const;
   const TABS = ["review", "transcript", "minutes"] as const;
@@ -35,9 +47,17 @@
   let category = $state("all");
   let jumpId = $state<string>();
   let profile = $state({ device: "cuda", parakeet: false, diarization: false });
+  let uploading = $state<string | null>(null);
+  let recording = $state(false);
+  let saving = $state(false); // recording stopped; waiting for the saved audio to show up
 
   const capabilities = createQuery({ key: () => ["proof"], fn: () => api<any>("/system/proof") });
-  const meeting = createQuery({ key: () => ["meeting", id], fn: () => api<Meeting>(`/meetings/${id}`), interval: 2000 });
+  // Poll faster while processing, so the finished minutes appear promptly.
+  const meeting: Query<Meeting> = createQuery({
+    key: () => ["meeting", id],
+    fn: () => api<Meeting>(`/meetings/${id}`),
+    interval: () => (meeting.data?.jobs?.some((j) => ["queued", "running"].includes(j.state)) ? 1000 : 2000),
+  });
   const review = createQuery({ key: () => ["review", id], fn: () => api<any>(`/meetings/${id}/items`), interval: 4000 });
   const transcript = createQuery({
     key: () => ["transcript-all", id, meeting.data?.revision],
@@ -79,10 +99,63 @@
     }
   }
 
+  /** Start processing new audio right away, unless something is already running. */
+  async function processNew(asset?: { id: string }) {
+    if (!asset || meeting.data?.jobs?.some((j) => ["queued", "running"].includes(j.state))) return;
+    await api(`/meetings/${id}/jobs`, "POST", { asset_id: asset.id, ...profile });
+  }
+
   async function upload(file: File) {
     const form = new FormData();
     form.append("file", file);
-    await act(() => api(`/meetings/${id}/uploads`, "POST", form));
+    uploading = file.name;
+    try {
+      await act(async () => {
+        const asset = await api<{ id: string }>(`/meetings/${id}/uploads`, "POST", form);
+        await processNew(asset);
+      });
+      await meeting.refetch(); // show the new audio and job before leaving the uploading state
+    } finally {
+      uploading = null;
+    }
+  }
+
+  async function recorded(asset?: { id: string }) {
+    saving = true;
+    recording = false;
+    try {
+      await act(() => processNew(asset));
+      await meeting.refetch();
+    } finally {
+      saving = false;
+    }
+  }
+
+  // Carry out what the start panel asked for, once.
+  $effect(() => {
+    const next = intent;
+    if (!next || !meeting.data) return;
+    untrack(() => {
+      intentDone?.();
+      if (next.kind === "record") recording = true;
+      else void upload(next.file);
+    });
+  });
+
+  // New results bump the meeting revision: fetch the review items straight away.
+  $effect(() => {
+    meeting.data?.revision;
+    untrack(() => void review.refetch());
+  });
+
+  async function openItem(itemId: string) {
+    tab = "review";
+    category = "all";
+    search = "";
+    selection = itemId;
+    field = "text";
+    await tick();
+    document.querySelector(".review-toolbar")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function play(segment: { asset_id: string; start: number }) {
@@ -167,6 +240,24 @@
     </div>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
 
+    <MeetingFlow
+      meeting={m}
+      {t}
+      {role}
+      {busy}
+      {act}
+      {candidates}
+      reviewRevision={review.data?.revision}
+      device={profile.device}
+      uploading={uploading ?? (intent?.kind === "upload" ? intent.file.name : null)}
+      recording={recording || intent?.kind === "record"}
+      {saving}
+      record={() => (recording = true)}
+      {recorded}
+      file={upload}
+      {openItem}
+    />
+
     {#if toolsOpen}
       <div class="workspace-tools">
         {#if m.notes}<details class="card">
@@ -233,7 +324,7 @@
                 >
               </div>
             {/each}
-            <Recorder meeting={id} {t} done={refresh} />
+            <Recorder meeting={id} {t} done={(asset) => act(() => processNew(asset))} />
             {#each m.jobs ?? [] as j (j.id)}
               <div class="job" role="status">
                 <strong>{tr(j.stage.replaceAll("_", " "))}</strong> · {tr(j.state)}<JobProgress job={j} />
@@ -287,151 +378,153 @@
       </div>
     {/if}
 
-    <div class="tabs" role="tablist">
-      {#each TABS as k (k)}
-        <button role="tab" aria-selected={tab === k} onclick={() => (tab = k)}>{t[k]}</button>
-      {/each}
-    </div>
-    <MeetingAudio {audio} {segments} />
-    {#if m.assets && m.assets.length > 1}
-      <label class="asset-switch"
-        >{tr("Recording")}<select value={audio.asset?.id} onchange={(e) => audio.seek(0, false, e.currentTarget.value)}
-          >{#each m.assets as a, i (a.id)}<option value={a.id}>{tr("Recording")} {i + 1} · {timeLabel(a.samples / a.sample_rate)}</option>{/each}</select
-        ></label
-      >
-    {/if}
-    <div class="recording-metadata">
-      <div class="speaker-key" aria-label={tr("Speaker key")}>
-        {#each speakerNames as name (name)}<span style:color={speakerPalette[speakerIndex(name)]}><i style:background="currentColor"></i>{name}</span>{/each}
+    {#if m.assets?.length}
+      <div class="tabs" role="tablist">
+        {#each TABS as k (k)}
+          <button role="tab" aria-selected={tab === k} onclick={() => (tab = k)}>{t[k]}</button>
+        {/each}
       </div>
-      {#if segments.some((s) => s.raw.includes("user_supplied_transcript"))}<span>{tr("Imported transcript · approximate timestamps")}</span>{/if}
-    </div>
-    {#if tab !== "transcript" && m.transcript_pending_assets?.length}
-      <p class="notice">{tr("Transcript updated. Review affected items before approving minutes.")}</p>
-    {/if}
-
-    {#if tab === "review"}
-      <div class="review-toolbar">
-        <div class="category-filters">
-          {#each CATEGORIES as k (k)}
-            <button
-              aria-pressed={category === k}
-              onclick={() => {
-                category = k;
-                selection = null;
-              }}>{tr(k === "all" ? "All items" : k)} <span>{candidates.filter((c) => k === "all" || c.body.category === k).length}</span></button
-            >
-          {/each}
+      <MeetingAudio {audio} {segments} />
+      {#if m.assets && m.assets.length > 1}
+        <label class="asset-switch"
+          >{tr("Recording")}<select value={audio.asset?.id} onchange={(e) => audio.seek(0, false, e.currentTarget.value)}
+            >{#each m.assets as a, i (a.id)}<option value={a.id}>{tr("Recording")} {i + 1} · {timeLabel(a.samples / a.sample_rate)}</option>{/each}</select
+          ></label
+        >
+      {/if}
+      <div class="recording-metadata">
+        <div class="speaker-key" aria-label={tr("Speaker key")}>
+          {#each speakerNames as name (name)}<span style:color={speakerPalette[speakerIndex(name)]}><i style:background="currentColor"></i>{name}</span>{/each}
         </div>
-        <input aria-label={tr("Find an action or decision")} placeholder={tr("Find an action or decision")} bind:value={search} />
+        {#if segments.some((s) => s.raw.includes("user_supplied_transcript"))}<span>{tr("Imported transcript · approximate timestamps")}</span>{/if}
       </div>
-      <div class="reviewgrid">
-        <section class="card itemlist">
-          <h2>{tr("Decisions & actions")}</h2>
-          <p class="caption">{openItems} {tr("to review")}</p>
-          {#if !candidates.length}<p>{tr("No extracted events yet. Process saved audio to begin.")}</p>{/if}
-          {#each visibleCandidates as c (c.id)}
-            <button
-              class={selected?.id === c.id ? "selected" : ""}
-              onclick={() => {
-                selection = c.id;
-                field = "text";
-              }}><strong>{c.body.subject}</strong><small>{tr(c.body.kind)} · {tr(c.review.replaceAll("_", " "))}</small></button
-            >
-          {/each}
-        </section>
-        <section class="card detail">
-          {#if selected}
-            <p class="eyebrow">{tr(selected.body.category)} · {tr(selected.body.kind)}</p>
-            <h2>{selected.body.text}</h2>
-            <p class="badge">{tr("Review: ")}{tr(selected.review.replaceAll("_", " "))}</p>
-            {#each FIELDS as f (f)}
-              <button class="field" onclick={() => (field = f)}
-                ><span>{tr(f)}</span><strong>{selected.body[f] || t.notSpecified}</strong><small>{tr("View source ↗")}</small></button
+      {#if tab !== "transcript" && m.transcript_pending_assets?.length}
+        <p class="notice">{tr("Transcript updated. Review affected items before approving minutes.")}</p>
+      {/if}
+
+      {#if tab === "review"}
+        <div class="review-toolbar">
+          <div class="category-filters">
+            {#each CATEGORIES as k (k)}
+              <button
+                aria-pressed={category === k}
+                onclick={() => {
+                  category = k;
+                  selection = null;
+                }}>{tr(k === "all" ? "All items" : k)} <span>{candidates.filter((c) => k === "all" || c.body.category === k).length}</span></button
               >
             {/each}
-            {#if selected.body.uncertainties.length > 0}<p class="caption">{tr("Processing warning (original wording)")}</p>{/if}
-            {#each selected.body.uncertainties as u (u)}<p class="notice">{u}</p>{/each}
-            <div class="toolbar">
-              <button
-                disabled={busy ||
-                  role === "viewer" ||
-                  selected.review === "accepted" ||
-                  !!m.transcript_pending_assets?.length ||
-                  anyRunning ||
-                  review.data?.revision !== m.revision}
-                onclick={() => act(() => api(`/review-issues/${selected.id}/resolve`, "POST", { revision: review.data.revision, action: "accepted" }))}
-                >{t.accept}</button
-              ><button
-                class="secondary"
-                disabled={busy || role === "viewer" || selected.review === "excluded"}
-                onclick={() => act(() => api(`/review-issues/${selected.id}/resolve`, "POST", { revision: review.data.revision, action: "excluded" }))}
-                >{t.exclude}</button
-              >
-            </div>
-            <p class="caption">{tr("Acceptance confirms your review of the interpretation, including each field.")}</p>
-            {#if role !== "viewer"}
-              {#key selected.id}
-                <CorrectionForm candidate={selected} revision={review.data.revision} {act} corrected={(next) => (selection = next)} {subjects} />
-              {/key}
-            {/if}
-          {:else}
-            <h2>{tr("Review the evidence before approving")}</h2>
-          {/if}
-        </section>
-        <aside class="card evidence">
-          <p class="eyebrow">{tr("SOURCE EVIDENCE · ")}{tr(field)}</p>
-          {#each refs as r (r.id)}
-            <div>
-              <blockquote>{r.quote}</blockquote>
-              <p>{tr("Transcript revision ")}{r.revision}</p>
-              <button class="secondary" onclick={() => playEvidence(r)}>{tr("▶ Play source clip")}</button><button
-                class="textbutton source-jump"
-                onclick={() => void openTranscript(r)}>{tr("Open in transcript")} ↗</button
-              >
-            </div>
-          {:else}
-            <p>{tr("No source supplied for this field. Keep unsupported values unresolved.")}</p>
-          {/each}
-          <CandidateHistory id={selected?.id} />
-        </aside>
-      </div>
-    {/if}
-
-    {#if tab === "transcript"}
-      {#if transcript.isPending}
-        <p role="status">{t.loading}</p>
-      {:else if transcript.isError}
-        <p role="alert" class="error">{String(transcript.error)}</p>
-      {:else}
-        <TranscriptExperience
-          {jumpId}
-          {segments}
-          activeId={audio.loaded ? active?.id : undefined}
-          readOnly={role === "viewer"}
-          {seek}
-          save={saveTranscript}
-          {busy}
-        />
-      {/if}
-    {/if}
-
-    {#if tab === "minutes"}
-      <section class="card">
-        <div class="pageheading">
-          <div>
-            <h2>{tr("Versioned minutes")}</h2>
-            <p>{tr("Resolve every review item, then create an immutable preview.")}</p>
           </div>
-          <button disabled={busy || role === "viewer"} onclick={() => act(() => api(`/meetings/${id}/snapshots`, "POST", { revision: m.revision }))}
-            >{tr("Create preview")}</button
-          >
+          <input aria-label={tr("Find an action or decision")} placeholder={tr("Find an action or decision")} bind:value={search} />
         </div>
-        {#each snapshots.data ?? [] as s (s.id)}
-          <Snapshot snapshot={s} revision={m.revision} {t} groups={groups.data || []} {act} busy={busy || role === "viewer"} />
-        {/each}
-        {#if !snapshots.data?.length}<p>{tr("No versions yet. Approval and sending are separate steps.")}</p>{/if}
-      </section>
+        <div class="reviewgrid">
+          <section class="card itemlist">
+            <h2>{tr("Decisions & actions")}</h2>
+            <p class="caption">{openItems} {tr("to review")}</p>
+            {#if !candidates.length}<p>{tr("No extracted events yet. Process saved audio to begin.")}</p>{/if}
+            {#each visibleCandidates as c (c.id)}
+              <button
+                class={selected?.id === c.id ? "selected" : ""}
+                onclick={() => {
+                  selection = c.id;
+                  field = "text";
+                }}><strong>{c.body.subject}</strong><small>{tr(c.body.kind)} · {tr(c.review.replaceAll("_", " "))}</small></button
+              >
+            {/each}
+          </section>
+          <section class="card detail">
+            {#if selected}
+              <p class="eyebrow">{tr(selected.body.category)} · {tr(selected.body.kind)}</p>
+              <h2>{selected.body.text}</h2>
+              <p class="badge">{tr("Review: ")}{tr(selected.review.replaceAll("_", " "))}</p>
+              {#each FIELDS as f (f)}
+                <button class="field" onclick={() => (field = f)}
+                  ><span>{tr(f)}</span><strong>{selected.body[f] || t.notSpecified}</strong><small>{tr("View source ↗")}</small></button
+                >
+              {/each}
+              {#if selected.body.uncertainties.length > 0}<p class="caption">{tr("Processing warning (original wording)")}</p>{/if}
+              {#each selected.body.uncertainties as u (u)}<p class="notice">{u}</p>{/each}
+              <div class="toolbar">
+                <button
+                  disabled={busy ||
+                    role === "viewer" ||
+                    selected.review === "accepted" ||
+                    !!m.transcript_pending_assets?.length ||
+                    anyRunning ||
+                    review.data?.revision !== m.revision}
+                  onclick={() => act(() => api(`/review-issues/${selected.id}/resolve`, "POST", { revision: review.data.revision, action: "accepted" }))}
+                  >{t.accept}</button
+                ><button
+                  class="secondary"
+                  disabled={busy || role === "viewer" || selected.review === "excluded"}
+                  onclick={() => act(() => api(`/review-issues/${selected.id}/resolve`, "POST", { revision: review.data.revision, action: "excluded" }))}
+                  >{t.exclude}</button
+                >
+              </div>
+              <p class="caption">{tr("Acceptance confirms your review of the interpretation, including each field.")}</p>
+              {#if role !== "viewer"}
+                {#key selected.id}
+                  <CorrectionForm candidate={selected} revision={review.data.revision} {act} corrected={(next) => (selection = next)} {subjects} />
+                {/key}
+              {/if}
+            {:else}
+              <h2>{tr("Review the evidence before approving")}</h2>
+            {/if}
+          </section>
+          <aside class="card evidence">
+            <p class="eyebrow">{tr("SOURCE EVIDENCE · ")}{tr(field)}</p>
+            {#each refs as r (r.id)}
+              <div>
+                <blockquote>{r.quote}</blockquote>
+                <p>{tr("Transcript revision ")}{r.revision}</p>
+                <button class="secondary" onclick={() => playEvidence(r)}>{tr("▶ Play source clip")}</button><button
+                  class="textbutton source-jump"
+                  onclick={() => void openTranscript(r)}>{tr("Open in transcript")} ↗</button
+                >
+              </div>
+            {:else}
+              <p>{tr("No source supplied for this field. Keep unsupported values unresolved.")}</p>
+            {/each}
+            <CandidateHistory id={selected?.id} />
+          </aside>
+        </div>
+      {/if}
+
+      {#if tab === "transcript"}
+        {#if transcript.isPending}
+          <p role="status">{t.loading}</p>
+        {:else if transcript.isError}
+          <p role="alert" class="error">{String(transcript.error)}</p>
+        {:else}
+          <TranscriptExperience
+            {jumpId}
+            {segments}
+            activeId={audio.loaded ? active?.id : undefined}
+            readOnly={role === "viewer"}
+            {seek}
+            save={saveTranscript}
+            {busy}
+          />
+        {/if}
+      {/if}
+
+      {#if tab === "minutes"}
+        <section class="card">
+          <div class="pageheading">
+            <div>
+              <h2>{tr("Versioned minutes")}</h2>
+              <p>{tr("Resolve every review item, then create an immutable preview.")}</p>
+            </div>
+            <button disabled={busy || role === "viewer"} onclick={() => act(() => api(`/meetings/${id}/snapshots`, "POST", { revision: m.revision }))}
+              >{tr("Create preview")}</button
+            >
+          </div>
+          {#each snapshots.data ?? [] as s (s.id)}
+            <Snapshot snapshot={s} revision={m.revision} {t} groups={groups.data || []} {act} busy={busy || role === "viewer"} />
+          {/each}
+          {#if !snapshots.data?.length}<p>{tr("No versions yet. Approval and sending are separate steps.")}</p>{/if}
+        </section>
+      {/if}
     {/if}
   </section>
 {/if}

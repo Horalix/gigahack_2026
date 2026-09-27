@@ -9,6 +9,9 @@ import { tr } from "./translations.svelte";
 
 export { assetAudioUrl, assetHasRealAudio, resetDemo, snapshotExportUrl } from "./mock/backend";
 
+/** True while the UI runs on the in-browser demo backend: nothing is really emailed. */
+export const DEMO_BACKEND = true;
+
 export let csrf = "";
 export const setCsrf = (token: string) => {
   csrf = token;

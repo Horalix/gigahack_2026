@@ -7,6 +7,7 @@
   import "@fontsource/noto-sans/cyrillic.css";
   import "$lib/notavra/notavra.css";
   import "$lib/notavra/experience.css";
+  import "$lib/notavra/flow.css";
   import App from "$lib/notavra/App.svelte";
 </script>
 

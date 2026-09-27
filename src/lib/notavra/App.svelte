@@ -10,6 +10,7 @@
   import Settings from "./features/Settings.svelte";
   import Templates from "./features/Templates.svelte";
   import Workspace from "./features/Workspace.svelte";
+  import type { Intent } from "./features/flow";
   import { strings } from "./i18n";
   import Login from "./Login.svelte";
   import Other from "./Other.svelte";
@@ -22,6 +23,8 @@
   let page = $state<string>("meetings");
   let meeting = $state<string | null>(current.url.searchParams.get("meeting"));
   let notice = $state("");
+  // Handed to a newly started meeting: begin recording, or upload this file.
+  let intent = $state.raw<Intent | undefined>(undefined);
   const t = $derived(strings[ui.lang]);
 
   const me = createQuery({
@@ -35,7 +38,8 @@
   });
   const setup = createQuery({ key: () => ["setup"], fn: () => api("/setup") });
 
-  function open(id: string | null) {
+  function open(id: string | null, next?: Intent) {
+    intent = next;
     meeting = id;
     replaceState(id ? "?meeting=" + id : current.url.pathname, {});
   }
@@ -106,10 +110,10 @@
         {#if page === "meetings"}
           {#if meeting}
             {#key meeting}
-              <Workspace role={me.data.role} id={meeting} {t} back={() => open(null)} />
+              <Workspace role={me.data.role} id={meeting} {t} back={() => open(null)} {intent} intentDone={() => (intent = undefined)} />
             {/key}
           {:else}
-            <Meetings canCreate={me.data.role !== "viewer"} {t} open={(id) => open(id)} />
+            <Meetings canCreate={me.data.role !== "viewer"} {t} {open} />
           {/if}
         {:else if page === "settings"}
           <Settings role={me.data.role} />
