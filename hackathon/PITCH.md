@@ -4,7 +4,7 @@
 
 Clinical teams lose time turning multilingual meetings into accurate, usable follow-up. Notavra turns a local audio recording into an editable transcript, evidence-linked decisions and actions, and a clinician-approved minutes file. It keeps source audio available during review, so a doctor can search a phrase, replay its timestamp, correct the wording and regenerate the output. In this prototype, ASR and decision extraction run locally, with no runtime cloud inference.
 
-Our measured Romanian sample favored Whisper large-v3 over the two tested OmniASR variants. With the 8 GB laptop profile, batch 2 took about 47 seconds for an 11m43s recording and scored 51.64% WER against a Microsoft-generated transcript. That reference is not human-verified, so this score measures disagreement, not clinical accuracy. The current stage-sum projection is 12.2 minutes per hour; we have not verified a full hour or the 15-minute end-to-end target. We are presenting a local workflow and an honest measurement, not a clinically validated product.
+Our measured Romanian sample favored Whisper large-v3 over the two tested OmniASR variants. With the 8 GB laptop profile, batch 2 took about 47 seconds for an 11m43s recording and scored 51.64% WER against a Microsoft-generated transcript. That reference is not human-verified, so this score measures disagreement, not clinical accuracy. The latest ASR+LLM stage-sum projects to 20.0 minutes per hour, above the 15-minute goal; we have not verified a full hour or end-to-end delivery time. We are presenting a local workflow and an honest measurement, not a clinically validated product.
 
 ## 3-minute arc
 
@@ -19,5 +19,5 @@ Our measured Romanian sample favored Whisper large-v3 over the two tested OmniAS
 
 - **Is any ASR/LLM call sent to a cloud service?** Runtime ASR and decision extraction use local model files. The final release still needs the disconnected-start/egress check.
 - **Why Whisper over OmniASR?** On the same Romanian audio and saved reference, current Whisper batch 2 scored 51.64% WER; Omni LLM scored 66.9%, and Omni CTC scored 72.6%. CTC did not support the same explicit Romanian language control. These are machine-reference disagreement results, not a claim of clinical accuracy.
-- **Does one hour finish in 15 minutes?** The current measured stage inputs project to 12.2 minutes/hour, but no full-hour run or end-to-end email-delivery timing has been completed. Do not answer “yes” until it has.
+- **Does one hour finish in 15 minutes?** The latest measured stage inputs project to 20.0 minutes/hour, and no full-hour run or end-to-end email-delivery timing has been completed. The current configuration does not yet meet the target.
 - **Is it ready for a hospital?** No. Local access controls and deletion exist, but GDPR/legal review, retention policy, backup/key handling, clinical validation, 5080 qualification and deployment review remain.

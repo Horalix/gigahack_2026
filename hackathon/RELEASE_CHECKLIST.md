@@ -18,7 +18,7 @@
 
 ## Must remain disclosed as open
 
-- [ ] Full one-hour upload-to-approved-file timing at or below 15 minutes. Current linear stage-sum estimate is 12.2 minutes/hour, not an hour test.
+- [ ] Full one-hour upload-to-approved-file timing at or below 15 minutes. Latest local ASR+LLM stage-sum projects to 20.0 minutes/hour; no one-hour test has been completed.
 - [ ] RTX 5080 / 16 GB host test. `hospital16` batch 4 and CUDA 13 are configured but not physically verified here.
 - [ ] WAN-disconnected launch and external-egress observation on the final demo build.
 - [ ] Physical microphone recording, permission-loss and user-visible preview-lag behavior on the demo device. Mocked UI plus one real sample-window API test pass, but no ambient/microphone run has been performed.

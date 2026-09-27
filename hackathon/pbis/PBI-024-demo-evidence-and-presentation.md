@@ -42,7 +42,7 @@ Writing Affan's email implementation plan, promising win/clinical validation, cl
 ## Completion record
 
 - Draft artifacts on `codex/notavra-finalization`: `hackathon/DEMO.md`, `hackathon/PITCH.md` and `hackathon/RELEASE_CHECKLIST.md`; current model/hardware evidence is linked from the handoff.
-- Commands and observed behavior: docs-only changes; verify with `git diff --check`. Current app verification: 54 service tests, 5 mocked UI tests (including provisional live words and correction/undo), Svelte check/build and laptop preflight pass. One real local 20-second preview window was also measured at 14.42 seconds end-to-end on the 8 GB laptop; it does not qualify one-hour performance.
+- Commands and observed behavior: docs-only changes; verify with `git diff --check`. Current app verification: 55 service tests, 5 mocked UI tests (including provisional live words and correction/undo), Svelte check/build, changed-file Ruff and laptop preflight pass. Browser-mode UI/API startup succeeded and health reports first-account setup is required. A real preview→seal→final-ASR window was exercised; matching live audio was reused and only the tail was reprocessed. The latest application ASR+LLM stage sum projects to 20.0 minutes/hour, above target; no hour performance claim is supported.
 - Acceptance evidence / limitations: the runbook and pitch separate verified behavior from projections. CEO rehearsal, final disconnected startup, full-hour timing, 5080 test, physical microphone and human review are not done; keep PBI OPEN.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
 

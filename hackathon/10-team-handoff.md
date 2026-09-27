@@ -4,7 +4,7 @@
 
 ## What we are building
 
-Notavra is a local hospital-meeting assistant: upload audio/video or record from the microphone, transcribe RO/RU/EN, extract decisions/actions with quote evidence and unresolved owners/dates, allow corrections, then produce a clinician-approved HTML file. A doctor has a searchable/paginated patient directory and meeting workspace. Affan owns SMTP and attaches the output file on his path; no SMTP implementation is in this branch. The old floating subtitle window is not part of this workflow. The 8 GB laptop's current Whisper+LLM stage timings project to 12.2 minutes/hour, but the full-hour <=15-minute goal is still unverified.
+Notavra is a local hospital-meeting assistant: upload audio/video or record from the microphone, transcribe RO/RU/EN, extract decisions/actions with quote evidence and unresolved owners/dates, allow corrections, then produce a clinician-approved HTML file. A doctor has a searchable/paginated patient directory and meeting workspace. Affan owns SMTP and attaches the output file on his path; no SMTP implementation is in this branch. The old floating subtitle window is not part of this workflow. The latest 8 GB laptop Whisper+LLM stage timings project to 20 minutes/hour, missing the <=15-minute target; this projection is from a 702.6-second sample, not a full-hour run.
 
 Security is pass/fail: no external ASR/LLM API at runtime; real patient data needs access control and stays outside Git/OneDrive. Today's prototype does not establish GDPR or clinical deployment approval. The CEO owns the pitch and evidence claims. The latest laptop ASR+LLM stage-sum projects to 20 minutes/hour, so the 15-minute gate is currently missed and remains unverified on a full-hour recording.
 
