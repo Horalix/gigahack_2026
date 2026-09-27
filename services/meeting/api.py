@@ -96,6 +96,44 @@ def host_gpu_memory_gb() -> float | None:
         return None
 
 
+def host_gpu_free_memory_gb() -> float | None:
+    try:
+        result = subprocess.run(["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                timeout=2, check=True)
+        values = [int(line.strip()) for line in result.stdout.decode().splitlines() if line.strip()]
+        return values[0] / 1024 if values else None
+    except (FileNotFoundError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def host_available_memory_gb() -> float | None:
+    """Return available physical RAM without adding a runtime dependency."""
+    if os.name == "nt":
+        import ctypes
+
+        class MemoryStatus(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = MemoryStatus()
+        status.dwLength = ctypes.sizeof(status)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return status.ullAvailPhys / (1024 ** 3)
+        return None
+    meminfo = Path("/proc/meminfo")
+    if meminfo.is_file():
+        for line in meminfo.read_text(encoding="ascii").splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / (1024 ** 2)
+    return None
+
+
 def create_app(data_root: Path | None = None) -> FastAPI:
     app = FastAPI(title="Secure MOM local meeting service", version="0.1.0", docs_url=None, redoc_url=None)
     app.state.store = Storage(data_root)
@@ -454,18 +492,29 @@ def create_app(data_root: Path | None = None) -> FastAPI:
     def get_profiles(actor: dict = Depends(principal)):
         from .models import resolve_profile
         gpu_memory = host_gpu_memory_gb()
+        gpu_free_memory = host_gpu_free_memory_gb()
+        available_ram = host_available_memory_gb()
+        from .cuda_runtime import configure_cuda_dll_search
+        cuda_runtime_ready, _ = configure_cuda_dll_search()
         choices = []
         for profile_id in ("laptop8", "hospital16", "cpu"):
             config = resolve_profile(profile_id)
             asr_path = Path(config["models"]["asr"]["path"])
             llm_path = Path(config["models"]["llm"]["path"])
             required_vram = float(config["limits"].get("max_vram_gb", 0))
-            compatible = (profile_id == "cpu" or
-                          (gpu_memory is not None and gpu_memory >= required_vram))
+            required_ram = float(config["limits"].get("min_available_ram_gb", 8))
+            required_free_vram = float(config["limits"].get("min_free_vram_gb", 0))
+            gpu_compatible = (profile_id == "cpu" or
+                              (gpu_memory is not None and gpu_memory >= required_vram and
+                               gpu_free_memory is not None and gpu_free_memory >= required_free_vram and
+                               cuda_runtime_ready))
+            compatible = gpu_compatible and available_ram is not None and available_ram >= required_ram
             choices.append({"id": profile_id, "hardware": config["hardware"],
                             "asrAlias": config["models"]["asr"]["alias"],
                             "llmAlias": config["models"]["llm"]["alias"],
                             "compatible": compatible, "hostVramGb": gpu_memory,
+                            "hostFreeVramGb": gpu_free_memory,
+                            "hostAvailableRamGb": available_ram, "requiredAvailableRamGb": required_ram,
                             "asrFilesPresent": (asr_path / "model.bin").is_file(),
                             "llmFilePresent": llm_path.is_file()})
         return {"profiles": choices, "defaultProfileId": os.environ.get("MOM_PROFILE", "laptop8"), "verified": False}
@@ -595,11 +644,25 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         except (ValueError, KeyError, FileNotFoundError) as exc:
             raise ServiceError(422, "PROFILE_UNAVAILABLE", str(exc)) from exc
         try:
+            minimum_ram = float(config.get("limits", {}).get("min_available_ram_gb", 8))
+            available_ram = host_available_memory_gb()
+            if available_ram is None or available_ram < minimum_ram:
+                raise ServiceError(503, "SYSTEM_MEMORY_LOW",
+                                   f"At least {minimum_ram:g} GiB free RAM is required; close other apps and retry")
             if config["models"]["asr"].get("device") == "cuda":
                 gpu_memory = host_gpu_memory_gb()
                 required_vram = float(config["limits"].get("max_vram_gb", 0))
                 if gpu_memory is None or gpu_memory < required_vram:
                     raise ServiceError(422, "PROFILE_INCOMPATIBLE", "This profile requires a compatible local NVIDIA GPU")
+                gpu_free_memory = host_gpu_free_memory_gb()
+                minimum_free_vram = float(config["limits"].get("min_free_vram_gb", 0))
+                if gpu_free_memory is None or gpu_free_memory < minimum_free_vram:
+                    raise ServiceError(503, "GPU_MEMORY_LOW",
+                                       f"At least {minimum_free_vram:g} GiB free GPU memory is required; close other GPU apps and retry")
+                from .cuda_runtime import configure_cuda_dll_search
+                cuda_ready, cuda_issue = configure_cuda_dll_search()
+                if not cuda_ready:
+                    raise ServiceError(503, "ASR_CUDA_RUNTIME_MISSING", cuda_issue or "CUDA runtime libraries are missing")
             validate_assets(config, kinds=("asr", "llm"))
         except ModelAssetError as exc:
             raise ServiceError(503, "MODEL_NOT_READY", "The selected local ASR model is missing or corrupt") from exc

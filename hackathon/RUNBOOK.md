@@ -14,7 +14,7 @@ $python = Join-Path $venv 'Scripts/python.exe'
 powershell -ExecutionPolicy Bypass -File scripts/hackathon/prepare-models.ps1 -Model All
 ```
 
-The model setup command downloads and verifies the pinned files. It needs internet; runtime does not download models. Prepare the same pinned files separately on the 5080 workstation.
+The model setup command downloads and verifies the pinned files. It needs internet; runtime does not download models. The locked Python environment includes CUDA 12/cuDNN 9 libraries for Windows GPU inference. Preflight checks that CTranslate2 can locate them and reports available RAM; set `MOM_CUDA_DLL_PATHS` only if those libraries are installed outside the app environment. Prepare the same pinned files separately on the 5080 workstation.
 
 ## Start the demo
 
@@ -38,7 +38,7 @@ powershell -ExecutionPolicy Bypass -File scripts/hackathon/stop.ps1
 powershell -ExecutionPolicy Bypass -File scripts/hackathon/start.ps1 -ProfileId hospital16
 ```
 
-`MOM_PROFILE` may also select the startup default. The in-app profile setting applies to new jobs only; a running job retains its saved configuration. Romanian is the default language; the language selector can choose Romanian, Russian, English or automatic detection. Do not use automatic detection for the Romanian-only comparison run.
+`MOM_PROFILE` may also select the startup default. `MOM_PYTHON` can point the launcher at a prepared venv when `MOM_DATA_DIR` is customized. The in-app profile setting applies to new jobs only; a running job retains its saved configuration. New jobs require at least 8 GiB available physical RAM and the profile's free-VRAM reserve; low-memory jobs are refused before loading models. ASR and LLM remain serial with bounded transcript batches. Romanian is the default language; the language selector can choose Romanian, Russian, English or automatic detection. Do not use automatic detection for the Romanian-only comparison run.
 
 Sign in or create the first installation administrator, create a meeting, then upload audio/video or record from the microphone. Microphone chunks are saved as you speak; transcription begins after Stop. Review the transcript and evidence-backed actions, correct passages if needed, reprocess after edits, check the approval box and download the HTML minutes file.
 

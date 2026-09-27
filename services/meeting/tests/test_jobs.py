@@ -22,6 +22,10 @@ def short_wav() -> bytes:
 
 
 def client(tmp_path, monkeypatch) -> TestClient:
+    monkeypatch.setattr("services.meeting.api.host_gpu_memory_gb", lambda: 16.0)
+    monkeypatch.setattr("services.meeting.api.host_gpu_free_memory_gb", lambda: 12.0)
+    monkeypatch.setattr("services.meeting.api.host_available_memory_gb", lambda: 12.0)
+    monkeypatch.setattr("services.meeting.cuda_runtime.configure_cuda_dll_search", lambda: (True, None))
     app = create_app(tmp_path)
     org_id = app.state.store.installation_organization()
     app.state.auth.create_user(org_id, "test-admin", "correct horse battery staple", "administrator", bootstrap=True)
@@ -139,6 +143,36 @@ def test_16gb_profile_is_rejected_on_8gb_gpu(tmp_path, monkeypatch):
     response = api.post(f"/api/meetings/{meeting_id}/jobs", json={"profileId": "hospital16"})
     assert response.status_code == 422
     assert response.json()["code"] == "PROFILE_INCOMPATIBLE"
+
+
+def test_low_available_ram_refuses_job_before_queueing(tmp_path, monkeypatch):
+    import services.meeting.api as api_module
+    api = client(tmp_path, monkeypatch)
+    meeting_id = meeting(api)
+    uploaded = api.post(f"/api/meetings/{meeting_id}/audio",
+        files={"file": ("synthetic.wav", short_wav(), "audio/wav")})
+    assert uploaded.status_code == 201
+    monkeypatch.setattr(api_module, "host_available_memory_gb", lambda: 2.5)
+    response = api.post(f"/api/meetings/{meeting_id}/jobs", json={"profileId": "laptop8", "language": "ro"})
+    assert response.status_code == 503
+    assert response.json()["code"] == "SYSTEM_MEMORY_LOW"
+    with api.app.state.store.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM jobs WHERE state = 'queued'").fetchone()[0] == 0
+
+
+def test_low_free_vram_refuses_job_before_queueing(tmp_path, monkeypatch):
+    import services.meeting.api as api_module
+    api = client(tmp_path, monkeypatch)
+    meeting_id = meeting(api)
+    uploaded = api.post(f"/api/meetings/{meeting_id}/audio",
+        files={"file": ("synthetic.wav", short_wav(), "audio/wav")})
+    assert uploaded.status_code == 201
+    monkeypatch.setattr(api_module, "host_gpu_free_memory_gb", lambda: 3.0)
+    response = api.post(f"/api/meetings/{meeting_id}/jobs", json={"profileId": "laptop8", "language": "ro"})
+    assert response.status_code == 503
+    assert response.json()["code"] == "GPU_MEMORY_LOW"
+    with api.app.state.store.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM jobs WHERE state = 'queued'").fetchone()[0] == 0
 
 
 def test_no_audio_and_invalid_source_are_rejected(tmp_path, monkeypatch):

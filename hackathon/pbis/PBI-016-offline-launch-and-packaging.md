@@ -43,6 +43,7 @@ SMTP setup, emailing runbooks, OS firewall changes without scoped review, full n
 ## Completion record
 
 - Commit / changed files: `9bb3404`; added PowerShell preflight/start/stop scripts and a concise offline-demo runbook; the selected profile now sets the default profile in the new-meeting flow.
+- Follow-up on `codex/cuda-memory-guard`: faster-whisper/CTranslate2 are pinned to 1.2.1/4.8.2, Windows CUDA DLL discovery is checked before ASR loads, and job admission reserves 8 GiB system RAM plus profile-specific free VRAM. The laptop profile uses FP16 batch 1 after int8-float16 failed on the installed CUDA stack; preflight and the 60-second GPU inference smoke pass.
 - Commands and observed behavior: PowerShell parser accepted all three scripts; `preflight.ps1 -ProfileId laptop8` verified the installed pinned ASR/LLM files and found 8 GiB VRAM; Browser mode started API, worker and Vite and returned HTTP 200 from UI and API; Playwright rendered the setup form with no client errors; `stop.ps1` stopped exactly the three recorded helpers and released both ports.
 - Acceptance evidence / limitations: Browser launch works on this laptop with network disconnected not tested. Tauri compilation remains unverified because CMake and `libclang.dll` are not installed here (browser-mode fallback works). Neither offline egress nor a full one-hour transcription pipeline is qualified. Keep this PBI OPEN.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.

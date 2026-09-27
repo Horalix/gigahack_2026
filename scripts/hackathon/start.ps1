@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $dataRoot = if ($env:MOM_DATA_DIR) { $env:MOM_DATA_DIR } else { Join-Path $env:LOCALAPPDATA 'SecureMOM' }
-$python = Join-Path $dataRoot 'venv/Scripts/python.exe'
+$python = if ($env:MOM_PYTHON) { (Resolve-Path -LiteralPath $env:MOM_PYTHON).Path } else { Join-Path $env:LOCALAPPDATA 'SecureMOM/venv/Scripts/python.exe' }
 . (Join-Path $PSScriptRoot 'preflight.ps1') -ProfileId $ProfileId -PythonPath $python
 
 $runDirectory = Join-Path $dataRoot 'run'
