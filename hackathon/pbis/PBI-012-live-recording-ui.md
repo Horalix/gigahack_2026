@@ -41,8 +41,8 @@ Background recording after browser closes, speaker enrollment, native overlay fu
 
 ## Completion record
 
-- Commit / changed files: pending
-- Commands and observed behavior: pending
-- Acceptance evidence / limitations: pending
+- Commit / changed files: `00a5730`, `0fb96f0`; main-app microphone recording now uploads acknowledged browser chunks to the local service and resumes/declares saved partial captures after interruption.
+- Commands and observed behavior: capture API tests cover durable sequence writes, duplicate retries, gap rejection, restart recovery, WAV sealing and access isolation; Svelte check/build pass.
+- Acceptance evidence / limitations: audio recording remains capture-then-transcribe after Stop; no provisional/live transcript or audio-level meter is displayed, and a physical microphone run has not been performed. Keep PBI OPEN; the current implementation only establishes safe local capture and final processing.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
 

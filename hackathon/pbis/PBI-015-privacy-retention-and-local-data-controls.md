@@ -43,8 +43,8 @@ Claims of GDPR certification, wiping other people's files, changing host encrypt
 
 ## Completion record
 
-- Commit / changed files: `pending`; owner-only purge for completed meetings, deletion audit and deferred app-managed file cleanup table. Dashboard confirms scope before deleting.
-- Commands and observed behavior: `python -m pytest services/meeting/tests/test_retention.py -q` (2 passed). Tests verify source audio and interrupted capture chunks are removed, the meeting is inaccessible after deletion, a minimal audit survives, a running job blocks deletion, and an ungranted user cannot delete the meeting.
+- Commit / changed files: `ef3fb6d`; owner-only purge for completed meetings, deletion audit and deferred app-managed file cleanup table. Dashboard confirms scope before deleting.
+- Commands and observed behavior: `python -m pytest services/meeting/tests/test_retention.py -q` (2 passed). Tests verify source audio and interrupted capture chunks are removed, the meeting is inaccessible after deletion, a minimal audit survives, a running job blocks deletion, and an ungranted user cannot delete the meeting. Final combined service suite: 46 passed.
 - Acceptance evidence / limitations: completed meeting and local derivatives are removed and records revoked. Queued jobs are canceled with the meeting. Running inference blocks deletion until safe; patient-level deletion, configurable/automatic expiry, key erasure, backups, SSD snapshots, downloaded files and legal holds are not covered. The workbench/README explicitly state this is not GDPR certification. Keep this PBI OPEN.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
 

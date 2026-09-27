@@ -42,8 +42,8 @@ Native system/application capture expansion, simultaneous GPU models, live decis
 
 ## Completion record
 
-- Commit / changed files: `pending`; added capture-session/chunk tables, authenticated create/status/delete/chunk/seal routes, bounded sequential durable writes, idempotent retries, contiguous sequence validation, media reassembly/decode, and workbench recovery for acknowledged chunks.
-- Commands and observed behavior: `python -m pytest services/meeting/tests -q` (41 passed); `npm run check` (0 errors/warnings); `npm run build` passed. Capture tests verify same-byte retry, conflicting/gapped chunks, incomplete seal rejection, persistence across service restart, WAV seal, idempotent seal and access isolation.
+- Commit / changed files: `0fb96f0`; added capture-session/chunk tables, authenticated create/status/delete/chunk/seal routes, bounded sequential durable writes, idempotent retries, contiguous sequence validation, media reassembly/decode, and workbench recovery for acknowledged chunks.
+- Commands and observed behavior: `python -m pytest services/meeting/tests -q` (46 passed in the final combined suite); `npm run check` (0 errors/warnings); `npm run build` passed. Capture tests verify same-byte retry, conflicting/gapped chunks, incomplete seal rejection, persistence across service restart, WAV seal, idempotent seal and access isolation.
 - Acceptance evidence / limitations: captured bytes are durably saved to disk in sequenced chunks; complete sessions reassemble into a source asset and can be retried independently of inference. Unfinished sessions retain acknowledged chunks for recovery. This implementation does not run ASR during recording, does not yet test a one-hour capture or browser-produced WebM on the target machines, and does not prove one-hour source-offset/tail accuracy. Keep this PBI OPEN until those acceptance conditions are measured.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
 

@@ -41,8 +41,8 @@ AI flag generation, global blind replace, patient diagnosis editing, advanced do
 
 ## Completion record
 
-- Commit / changed files: `pending`; authorized normalized-audio playback, Unicode text search with match counters and Up/Down/Enter navigation, passage selection, before/after previews, atomic find/replace and existing audited Undo control.
-- Commands and observed behavior: `python -m pytest services/meeting/tests -q` (45 passed, including audio route access); `npm run check` (0 errors/warnings); `npm run build` passed.
+- Commit / changed files: `47d30ed`; authorized normalized-audio playback, Unicode text search with match counters and Up/Down/Enter navigation, passage selection, before/after previews, atomic find/replace and existing audited Undo control.
+- Commands and observed behavior: `python -m pytest services/meeting/tests -q` (46 passed, including audio route access); `npm run check` (0 errors/warnings); `npm run build` passed.
 - Acceptance evidence / limitations: playback uses the normalized local WAV behind existing meeting access checks. Review tools do not yet seek playback to the selected phrase; replacement selections operate on selected passages and preview the whole affected passage. Browser keyboard/focus and real audio playback remain unverified, so keep this PBI OPEN until the integrated UI is manually exercised.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
 

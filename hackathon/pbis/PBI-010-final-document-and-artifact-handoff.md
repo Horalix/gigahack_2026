@@ -42,8 +42,8 @@ SMTP, email addresses, recipient routing, delivery outbox/retries or any mailing
 
 ## Completion record
 
-- Commit / changed files: see PBI-010 artifact implementation commit; added the self-contained escaped HTML renderer, artifact schema migration and local approval/download routes, plus the review-and-download control in Notavra.
-- Commands and observed behavior: `python -m pytest services/meeting/tests -q` (39 passed), `npm run check` (0 errors/warnings), `npm run build` passed. Artifact tests exercise generated HTML, approval, checksum verification, authorization, stale revision rejection and invalidation after correction.
+- Commit / changed files: `1efa3ac`; added the self-contained escaped HTML renderer, artifact schema migration and local approval/download routes, plus the review-and-download control in Notavra.
+- Commands and observed behavior: `python -m pytest services/meeting/tests -q` (46 passed in the final combined suite), `npm run check` (0 errors/warnings), `npm run build` passed. Artifact tests exercise generated HTML, approval, checksum verification, authorization, stale revision rejection and invalidation after correction.
 - Acceptance evidence / limitations: artifact file uses an ID-only path and records meeting ID, transcript revision, digest, current status and approving user/time. The backend serves only the latest approved revision to users with meeting access. Source content is escaped and no remote assets are loaded. Affan's branch contract/attachment consumption has not been integrated or verified, and the 16 GB workflow is not tested; PBI remains OPEN until that boundary is confirmed.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
 
