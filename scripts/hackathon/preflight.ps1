@@ -21,9 +21,13 @@ import os
 from services.meeting.models import resolve_profile, validate_assets
 from services.meeting.storage import Storage
 from services.meeting.api import host_available_memory_gb
+from services.meeting.adapters.llm import _runtime_path
 profile = os.environ['MOM_PROFILE']
 config = resolve_profile(profile_id=profile)
 validate_assets(config)
+runtime = _runtime_path(config['models']['llm'])
+if not runtime.is_file():
+    raise SystemExit('Pinned local LLM runtime is missing at {}. Run scripts/hackathon/prepare-llm-runtime.ps1 for this profile.'.format(runtime))
 if profile != 'cpu':
     from services.meeting.cuda_runtime import configure_cuda_dll_search
     ready, issue = configure_cuda_dll_search()
@@ -31,7 +35,7 @@ if profile != 'cpu':
         raise SystemExit('{}. Install services/meeting/requirements.lock or set MOM_CUDA_DLL_PATHS.'.format(issue))
 Storage()
 ram = host_available_memory_gb()
-print('Profile {}: pinned ASR/LLM files and CUDA libraries verified; available RAM: {:.1f} GiB.'.format(profile, ram) if ram is not None else 'Profile {}: model assets verified; available RAM could not be detected.'.format(profile))
+print('Profile {}: pinned ASR/LLM files, llama.cpp runtime and CUDA libraries verified; available RAM: {:.1f} GiB.'.format(profile, ram) if ram is not None else 'Profile {}: model assets/runtime verified; available RAM could not be detected.'.format(profile))
 '@
 $priorErrorAction = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'

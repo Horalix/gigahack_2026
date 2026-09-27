@@ -499,8 +499,10 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         choices = []
         for profile_id in ("laptop8", "hospital16", "cpu"):
             config = resolve_profile(profile_id)
+            from .adapters.llm import _runtime_path
             asr_path = Path(config["models"]["asr"]["path"])
             llm_path = Path(config["models"]["llm"]["path"])
+            llm_runtime_present = _runtime_path(config["models"]["llm"]).is_file()
             required_vram = float(config["limits"].get("max_vram_gb", 0))
             required_ram = float(config["limits"].get("min_available_ram_gb", 8))
             required_free_vram = float(config["limits"].get("min_free_vram_gb", 0))
@@ -508,13 +510,15 @@ def create_app(data_root: Path | None = None) -> FastAPI:
                               (gpu_memory is not None and gpu_memory >= required_vram and
                                gpu_free_memory is not None and gpu_free_memory >= required_free_vram and
                                cuda_runtime_ready))
-            compatible = gpu_compatible and available_ram is not None and available_ram >= required_ram
+            compatible = (gpu_compatible and available_ram is not None and available_ram >= required_ram
+                          and llm_runtime_present)
             choices.append({"id": profile_id, "hardware": config["hardware"],
                             "asrAlias": config["models"]["asr"]["alias"],
                             "llmAlias": config["models"]["llm"]["alias"],
                             "compatible": compatible, "hostVramGb": gpu_memory,
                             "hostFreeVramGb": gpu_free_memory,
                             "hostAvailableRamGb": available_ram, "requiredAvailableRamGb": required_ram,
+                            "llmRuntimePresent": llm_runtime_present,
                             "asrFilesPresent": (asr_path / "model.bin").is_file(),
                             "llmFilePresent": llm_path.is_file()})
         return {"profiles": choices, "defaultProfileId": os.environ.get("MOM_PROFILE", "laptop8"), "verified": False}
@@ -664,6 +668,9 @@ def create_app(data_root: Path | None = None) -> FastAPI:
                 if not cuda_ready:
                     raise ServiceError(503, "ASR_CUDA_RUNTIME_MISSING", cuda_issue or "CUDA runtime libraries are missing")
             validate_assets(config, kinds=("asr", "llm"))
+            from .adapters.llm import _runtime_path
+            if not _runtime_path(config["models"]["llm"]).is_file():
+                raise ServiceError(503, "LLM_RUNTIME_NOT_READY", "The selected local LLM runtime is missing")
         except ModelAssetError as exc:
             raise ServiceError(503, "MODEL_NOT_READY", "The selected local ASR model is missing or corrupt") from exc
         return job_record(db.create_or_get_job(meeting_id, actor["organization_id"], asset["id"], config))

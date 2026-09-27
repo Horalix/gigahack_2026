@@ -15,7 +15,7 @@
     "max_asr_batch_size": 8,
     "max_asr_beam_size": 10,
     "max_llm_context_size": 8192,
-    "max_llm_output_tokens": 2048,
+    "max_llm_output_tokens": 4096,
     "allowed_asr_models": ["whisper-large-v3-local"],
     "allowed_llm_models": ["qwen35-4b-q4km-local"]
   },
@@ -32,8 +32,9 @@
   "llm": {
     "model_alias": "qwen35-4b-q4km-local",
     "backend": "llama_cpp",
+    "runtime": "cuda12",
     "context_size": 8192,
-    "max_output_tokens": 2048,
+    "max_output_tokens": 4096,
     "chat_template": "embedded",
     "gpu_layers": -1
   },

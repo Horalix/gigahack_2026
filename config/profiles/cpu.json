@@ -26,6 +26,7 @@
   "llm": {
     "model_alias": "qwen35-4b-q4km-local",
     "backend": "llama_cpp",
+    "runtime": "cpu",
     "context_size": 4096,
     "max_output_tokens": 1024,
     "chat_template": "embedded",
