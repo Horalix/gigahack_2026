@@ -15,10 +15,11 @@
 - [x] `npm run check`: 0 errors/warnings; `npm run build`: passed.
 - [x] `scripts/hackathon/preflight.ps1 -ProfileId laptop8`: passed on this RTX 3070 Ti laptop.
 - [x] One real 20-second Romanian sample window passed through local preview API on the 3070 Ti in 14.42s including request/model setup; temporary audio was removed and VRAM returned to 0 MiB.
+- [x] Laptop8 completed a 3,600-second input soak from repeated authorized challenge audio: app reached `ready` with 143 segments and 9 decision items in 1,143.79s; minimum available RAM 2.63 GiB; peak device-wide GPU use 4,831 MiB. This shows no OOM/interruption on the repeated-audio soak, not a genuine one-hour meeting or semantic accuracy.
 
 ## Must remain disclosed as open
 
-- [ ] Full one-hour upload-to-approved-file timing at or below 15 minutes. Current batch-2 integrated app took 123s for 11m43s at its default 8,192-token context; a 4,096-token test took 141s with 6.75 GiB minimum free RAM. These are single-sample projections; no genuine one-hour test or email-receipt measurement has been completed.
+- [ ] Competition target: full one-hour upload-to-approved-file timing at or below 15 minutes. The user accepts hour-length completion without OOM/interruption for current development; the repeated-audio soak completed in 19m04s and does not qualify this speed target or a genuine one-hour recording.
 - [ ] RTX 5080 / 16 GB host test. `hospital16` batch 4 and CUDA 13 are configured but not physically verified here.
 - [ ] WAN-disconnected launch and external-egress observation on the final demo build.
 - [ ] Physical microphone recording, permission-loss and user-visible preview-lag behavior on the demo device. Mocked UI plus one real sample-window API test pass, but no ambient/microphone run has been performed.
