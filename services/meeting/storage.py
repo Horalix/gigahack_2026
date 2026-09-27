@@ -1081,7 +1081,7 @@ class Storage:
             return json.loads(row["result_json"]) if row else None
 
     def review_decision(self, meeting_id: str, organization_id: str, actor_id: str,
-                        transcript_revision: int, decision_id: str, review_status: str) -> dict | None:
+                        transcript_revision: int, decision_id: str, review: dict) -> dict | None:
         now = timestamp()
         with self.transaction() as db:
             meeting = db.execute("SELECT transcript_revision FROM meetings WHERE id=? AND organization_id=?",
@@ -1101,8 +1101,9 @@ class Storage:
                 return None
             history = item.setdefault("reviewHistory", [])
             history.append({"actorId": actor_id, "at": now,
-                            "from": item.get("reviewStatus", "needs_review"), "to": review_status})
-            item["reviewStatus"] = review_status
+                            "from": {key: item.get(key) for key in ("reviewStatus", "status", "text", "ownerLabel", "originalDateExpression")},
+                            "to": review})
+            item.update(review)
             item["reviewedBy"] = actor_id
             item["reviewedAt"] = now
             db.execute("UPDATE decision_results SET result_json=?,created_at=? WHERE job_id=?",

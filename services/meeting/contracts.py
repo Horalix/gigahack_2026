@@ -123,7 +123,11 @@ class ReviewDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     transcriptRevision: int = Field(ge=0)
-    reviewStatus: Literal["accepted", "excluded"]
+    reviewStatus: Literal["needs_review", "accepted", "excluded"]
+    status: Literal["proposed", "confirmed", "rejected", "cancelled", "unresolved"]
+    text: str = Field(min_length=1, max_length=1200)
+    ownerLabel: str | None = Field(default=None, max_length=240)
+    originalDateExpression: str | None = Field(default=None, max_length=240)
 
 
 class CreateCapture(BaseModel):

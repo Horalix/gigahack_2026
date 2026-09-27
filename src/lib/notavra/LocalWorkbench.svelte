@@ -64,6 +64,10 @@
   let selectedCorrectionSegments = $state<string[]>([]);
   let replacementText = $state("");
   let reviewConfirmed = $state(false);
+  let editingDecision = $state<string | null>(null);
+  let decisionDraft = $state<{ status: string; text: string; ownerLabel: string; originalDateExpression: string }>({
+    status: "proposed", text: "", ownerLabel: "", originalDateExpression: "",
+  });
   let progressTimer: ReturnType<typeof setInterval> | undefined;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let searchMatches = $derived.by(() => {
@@ -173,6 +177,7 @@
   async function openMeeting(id: string) {
     stopPolling();
     reviewConfirmed = false;
+    editingDecision = null;
     selectedCorrectionSegments = [];
     findQuery = "";
     activeFindIndex = 0;
@@ -312,13 +317,39 @@
 
   async function reviewDecision(decisionId: string, reviewStatus: "accepted" | "excluded") {
     if (!detail) return;
+    const item = detail.decisions?.items?.find((candidate: any) => candidate.id === decisionId);
+    if (!item) return;
     const meetingId = detail.meeting.id;
     try {
       await request(`/meetings/${meetingId}/decisions/${decisionId}`, {
-        method: "PUT", body: JSON.stringify({ transcriptRevision: detail.meeting.transcriptRevision, reviewStatus }),
+        method: "PUT", body: JSON.stringify({ transcriptRevision: detail.meeting.transcriptRevision,
+          reviewStatus, status: item.status, text: item.text, ownerLabel: item.ownerLabel,
+          originalDateExpression: item.originalDateExpression }),
       });
       await openMeeting(meetingId);
       status = reviewStatus === "accepted" ? "Action included in the approved minutes." : "Action excluded from the approved minutes.";
+    } catch (e) { showError(e); }
+  }
+
+  function editDecision(item: any) {
+    editingDecision = item.id;
+    decisionDraft = { status: item.status, text: item.text, ownerLabel: item.ownerLabel || "",
+      originalDateExpression: item.originalDateExpression || "" };
+  }
+
+  async function saveDecisionEdit(item: any) {
+    if (!detail) return;
+    const meetingId = detail.meeting.id;
+    try {
+      await request(`/meetings/${meetingId}/decisions/${item.id}`, {
+        method: "PUT", body: JSON.stringify({ transcriptRevision: detail.meeting.transcriptRevision,
+          reviewStatus: "needs_review", status: decisionDraft.status, text: decisionDraft.text,
+          ownerLabel: decisionDraft.ownerLabel || null,
+          originalDateExpression: decisionDraft.originalDateExpression || null }),
+      });
+      editingDecision = null;
+      await openMeeting(meetingId);
+      status = "Action updated. Review and include or exclude it before approving minutes.";
     } catch (e) { showError(e); }
   }
 
@@ -677,7 +708,7 @@
             <div class="find-toolbar"><label>Find in transcript<input bind:value={findQuery} oninput={() => (activeFindIndex = 0)} onkeydown={findKeydown} placeholder="Search Romanian or Cyrillic text" /></label><span>{searchMatches.length ? `${activeFindIndex + 1} of ${searchMatches.length}` : "0 matches"}</span><button class="quiet" disabled={!searchMatches.length} onclick={() => moveFindMatch(-1)}>↑ Previous</button><button class="quiet" disabled={!searchMatches.length} onclick={() => moveFindMatch(1)}>↓ Next</button></div>
             {#if findQuery.trim() && user.role !== "reviewer"}{@const bulkPreview = buildSelectedCorrections()}<div class="bulk-correction"><label>Replace with<input bind:value={replacementText} placeholder="Correct spelling or term" /></label><button class="primary" disabled={!bulkPreview.count} onclick={replaceInSelectedPassages}>Replace {bulkPreview.count} matches in selected passages</button><span>{bulkPreview.corrections.length} passages selected for change</span></div>{#each bulkPreview.corrections as correction (correction.segmentId)}<details class="correction-preview"><summary>Preview before and after</summary><del>{correction.oldText}</del><p>{correction.text}</p></details>{/each}{/if}
             <div class="transcript">{#each detail.segments as segment (segment.id)}{@const parts = highlightParts(segment.text, segment.id)}<p class:with-find={!!findQuery.trim() && user.role !== "reviewer"} id={`segment-${segment.id}`}><button class="play-passage" type="button" aria-label={`Play audio from ${formatTime(segment.startMs)}`} title="Play from this passage" onclick={() => playPassage(segment.startMs)}>▶</button><time>{formatTime(segment.startMs)}</time>{#if findQuery.trim() && user.role !== "reviewer"}<input class="select-match" type="checkbox" value={segment.id} bind:group={selectedCorrectionSegments} aria-label={`Select passage at ${formatTime(segment.startMs)} for bulk correction`} />{/if}{#if editingSegment === segment.id}<span class="edit-cell"><textarea bind:value={editText} rows="2"></textarea><button class="primary" onclick={() => saveSegment(segment)}>Save correction</button><button class="quiet" onclick={() => (editingSegment = null)}>Cancel</button></span>{:else}<span>{#each parts as part}<mark class:current={part.current} class:found={part.match}>{part.text}</mark>{/each}</span>{#if user.role !== "reviewer"}<button class="edit-button" onclick={() => { editingSegment = segment.id; editText = segment.text; }}>Edit</button>{/if}{/if}<small>{segment.language}</small></p>{/each}</div></section>{/if}
-          {#if detail.decisions}<section class="panel"><h2>Decisions and actions <span>human review required</span></h2>{#if detail.decisions.items?.length}{#each detail.decisions.items as item (item.id)}<article class="action-card"><div class="action-title"><span class="action-kind">{item.kind}</span><span class="action-state">{item.status}</span><b>{item.text}</b></div><div class="action-meta">{#if item.ownerLabel}<span>Owner: {item.ownerLabel}</span>{/if}{#if item.originalDateExpression}<span>Due: {item.originalDateExpression}</span>{/if}<span>Review: {item.reviewStatus || "needs_review"}</span></div>{#each item.taskEvidence as evidence (evidence.segmentId + evidence.startMs)}<blockquote><time>{formatTime(evidence.startMs)}</time>“{evidence.quote}”</blockquote>{/each}{#if user.role !== "reviewer"}<div class="downloads"><button class:chosen={item.reviewStatus === "accepted"} class="quiet" onclick={() => reviewDecision(item.id, "accepted")}>Include in minutes</button><button class:chosen={item.reviewStatus === "excluded"} class="quiet" onclick={() => reviewDecision(item.id, "excluded")}>Exclude</button></div>{/if}</article>{/each}{:else}<p>No decisions or follow-up actions were identified.</p>{/if}<small class="review-note">Suggested by local AI and backed by transcript excerpts. Confirm or correct before use.</small></section>{/if}
+          {#if detail.decisions}<section class="panel"><h2>Decisions and actions <span>human review required</span></h2>{#if detail.decisions.items?.length}{#each detail.decisions.items as item (item.id)}<article class="action-card"><div class="action-title"><span class="action-kind">{item.kind}</span><span class="action-state">{item.status}</span><b>{item.text}</b></div><div class="action-meta">{#if item.ownerLabel}<span>Owner: {item.ownerLabel}</span>{/if}{#if item.originalDateExpression}<span>Due: {item.originalDateExpression}</span>{/if}<span>Review: {item.reviewStatus || "needs_review"}</span></div>{#each item.taskEvidence as evidence (evidence.segmentId + evidence.startMs)}<blockquote><time>{formatTime(evidence.startMs)}</time>“{evidence.quote}”</blockquote>{/each}{#if user.role !== "reviewer"}{#if editingDecision === item.id}<div class="decision-edit"><label>Action<textarea bind:value={decisionDraft.text} maxlength="1200" rows="3"></textarea></label><label>Classification<select bind:value={decisionDraft.status}><option value="proposed">Proposed</option><option value="confirmed">Confirmed</option><option value="rejected">Rejected</option><option value="cancelled">Cancelled</option><option value="unresolved">Unresolved</option></select></label><label>Owner<input bind:value={decisionDraft.ownerLabel} maxlength="240" /></label><label>Deadline<input bind:value={decisionDraft.originalDateExpression} maxlength="240" /></label><div class="downloads"><button class="primary" disabled={!decisionDraft.text.trim()} onclick={() => saveDecisionEdit(item)}>Save edits</button><button class="quiet" onclick={() => (editingDecision = null)}>Cancel</button></div></div>{:else}<div class="downloads"><button class="quiet" onclick={() => editDecision(item)}>Edit action</button><button class:chosen={item.reviewStatus === "accepted"} class="quiet" onclick={() => reviewDecision(item.id, "accepted")}>Include in minutes</button><button class:chosen={item.reviewStatus === "excluded"} class="quiet" onclick={() => reviewDecision(item.id, "excluded")}>Exclude</button></div>{/if}{/if}</article>{/each}{:else}<p>No decisions or follow-up actions were identified.</p>{/if}<small class="review-note">Suggested by local AI and backed by transcript excerpts. Confirm or correct before use.</small></section>{/if}
           {#if detail.artifact}<p class="status">Current approved file · revision {detail.meeting.transcriptRevision} · SHA-256 {detail.artifact.sha256} · <a href={`/api/artifacts/${detail.artifact.id}/content`}>Download again</a></p>{/if}
           {#if detail.decisions && user.role !== "reviewer"}<section class="panel"><label class="approval"><input type="checkbox" bind:checked={reviewConfirmed} /> I reviewed the transcript and every suggested decision/action above.</label>{#if !allDecisionsReviewed()}<p class="muted">Include or exclude each suggested action before approving minutes.</p>{/if}<button class="primary" disabled={!reviewConfirmed || !allDecisionsReviewed()} onclick={approveAndDownload}>Approve and download HTML minutes</button><p class="muted">This creates a local, self-contained file for the current transcript revision. Corrections supersede it.</p></section>{/if}
           {#if detail.asset && detail.latestJob?.state === "failed" && user.role !== "reviewer"}<section class="panel"><p>Local processing stopped at {detail.latestJob.stage} ({detail.latestJob.errorCode || "unknown error"}). Retry resumes from the saved checkpoint when available.</p><button class="primary" disabled={busy} onclick={retryFailedJob}>Retry failed step</button></section>{/if}

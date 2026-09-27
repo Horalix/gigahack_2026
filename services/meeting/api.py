@@ -378,7 +378,7 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         if meeting["transcript_revision"] != data.transcriptRevision:
             raise ServiceError(409, "DECISION_REVIEW_STALE", "The transcript changed; reload decisions before reviewing")
         result = db.review_decision(meeting_id, actor["organization_id"], actor["id"],
-                                    data.transcriptRevision, decision_id, data.reviewStatus)
+                                    data.transcriptRevision, decision_id, data.model_dump(exclude={"transcriptRevision"}))
         if not result:
             raise ServiceError(404, "DECISION_NOT_FOUND", "Decision not found for the current transcript")
         return {"decisions": result}
