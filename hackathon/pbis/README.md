@@ -1,8 +1,8 @@
 # Secure MOM execution backlog
 
-**27 September 2026; app branch `codex/app-completion` at `c384291`, pushed.** The branch started from current `develop` after Affan's branch was merged. The ASR experiment branch contains the app branch and completed PBI-025 model-selection report.
+**27 September 2026; implementation and benchmark are integrated on `codex/asr-comparison`.** It contains the app branch, local GPU/memory guards, bounded evidence-linked extraction, and the refreshed PBI-025/PBI-017 results. User-authorized integration into `develop` is the next Git step.
 
-This index supersedes older task order and owner guesses in individual PBIs. PBIs 001–003 and 005–006 are complete; PBI-025's bounded model-selection experiment is also complete. The app now has a local workbench, searchable/paginated patient directory, upload/job/transcript/action flow, approved HTML artifact, durable microphone chunk capture, transcript edits/undo, local meeting purge and a Windows launch runbook. PBIs 004 and 007–017 remain OPEN where real accuracy, UI, Tauri, one-hour or offline acceptance is unverified; each PBI records what is implemented. The Whisper/OmniASR report is on `codex/asr-comparison`; it recommends Whisper large-v3 with Romanian selected for the demo. [The live team handoff](../10-team-handoff.md) contains current branch state and integration boundaries. Affan owns SMTP; no mailing code is included here.
+This index supersedes older task order and owner guesses in individual PBIs. PBIs 001–003 and 005–006 are complete; PBI-025's bounded model-selection experiment is complete. A real Romanian upload has completed ASR and local decision extraction on the laptop; it has not been through clinician review, one-hour timing or a verified email delivery. PBIs 004 and 007–017 remain OPEN where human accuracy, live/UI rehearsal, Tauri, one-hour or offline acceptance is unverified; each PBI records current evidence. The benchmark recommends Whisper large-v3 with Romanian selected for this Romanian sample. [The live team handoff](../10-team-handoff.md) contains current branch state and integration boundaries. Affan owns SMTP and delivery acceptance.
 
 ## Scope and authority
 
@@ -14,7 +14,7 @@ P0 = required today, including user-added patients/live/editing and CEO presenta
 
 ## Current next work
 
-1. **Complete and rehearse the real vertical flow:** setup/login → patient/meeting → audio/video upload or microphone capture → local ASR → local decisions with evidence → correction/reprocess → approve and download HTML. Use only synthetic or explicitly permitted audio. Record the cold/warm stage times and errors.
+1. **Rehearse the clinician flow in the UI:** setup/login → patient/meeting → upload or microphone capture → local ASR → local decisions → correction/reprocess → approve and download HTML. A real upload/worker run reaches `ready`; manually test UI review, edits, approval and file output. Use only synthetic or explicitly permitted audio.
 2. **Qualify the release claims:** keep Romanian selected for Medpark. PBI-025 reports Whisper vs OmniASR disagreement on the same challenge file, but the Microsoft reference is machine-generated and unverified. Do not report this as clinical WER. Keep the one-hour/15-minute criterion OPEN until a full one-hour local pipeline run is measured.
 3. **Close remaining P0 integration gaps:** verify Affan can attach the downloaded artifact on his own SMTP path; physically test microphone recording, review/search/replacement and Tauri on the demo laptop; prepare and test WAN-disconnected launch. Email implementation remains Affan's responsibility.
 4. **CEO:** finish the pitch and rehearse, with measured facts only. Security is pass/fail; say clearly that the prototype is local-first but is not GDPR-certified or cleared for real patient data.

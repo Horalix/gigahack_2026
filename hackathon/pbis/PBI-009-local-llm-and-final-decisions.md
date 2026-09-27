@@ -45,12 +45,14 @@ Automatic diagnosis/orders, second LLM verifier, broad agent framework, optimizi
 - Added an offline, loopback-only llama.cpp server adapter. It loads the model once per job, requires a per-process API key, disables Qwen thinking output, uses JSON Schema constrained output, and does not log prompts or responses.
 - Added bounded transcript batching, candidate extraction followed by cross-batch reconciliation, source quote/revision validation, relative-date preservation, and fail-closed persistence. Unsupported owner/date claims are left unknown; every result requires human review.
 - Integrated decisions into the existing worker and authenticated meeting response; decision records are persisted outside the repository and exposed only for the current transcript revision after the job reaches ready.
+- Updated final reconciliation to return indexes into validated candidate events. The service now assembles source evidence from those events instead of asking the model to repeat every quote in its final JSON. A single bounded retry is allowed only for invalid evidence; invalid evidence still fails closed after retry.
+- 27 September real app run: the consented 702.5-second Romanian Medpark upload completed on the RTX 3070 Ti using the local CUDA LLM runtime. The job reached `ready` with 166 transcript segments and 35 evidence-linked actions/decisions. They are all explicitly flagged for human review; nobody has manually assessed their clinical or meeting accuracy.
 - Synthetic local 4B smoke runs extracted two supported items with verbatim evidence. Outputs varied in whether an explicit "will call" was marked proposed or confirmed; owner attribution was over-broad, and date evidence was omitted. Validators now clear unsupported owner labels and recover only literal, recognized date expressions from cited text. A fixed generation seed is set, but semantic consistency still needs held-out testing. This is not a gold-suite pass.
 - PBI remains OPEN: multilingual gold cases, late amendment/rejection behavior on the real model, prompt-injection case, and a new audio-to-decisions run still need manual qualification. One-hour combined timing is also unmeasured.
 
 ## Completion record
 
-- Commit / changed files: pending
-- Commands and observed behavior: pending
-- Acceptance evidence / limitations: pending
+- Commit / changed files: `c57e289` and earlier app adapter implementation; decision schema, bounded quote retry and local CUDA runtime/profile support in `services/meeting/adapters/llm.py`, `services/meeting/decisions.py`, `services/meeting/models.py`, and profiles.
+- Commands and observed behavior: `python -m pytest services/meeting/tests -q` — 51 passed; real API upload + local worker run produced `ready`, 166 segments and 35 review-required items. Local Qwen ran through llama.cpp CUDA 12 on the 3070 Ti.
+- Acceptance evidence / limitations: a real audio pipeline now completes, but output decisions have not been manually reviewed. The 4B model's semantic quality and one-hour throughput remain unqualified. PBI stays OPEN.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
