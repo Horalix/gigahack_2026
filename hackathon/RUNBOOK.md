@@ -41,7 +41,7 @@ powershell -ExecutionPolicy Bypass -File scripts/hackathon/start.ps1 -ProfileId 
 
 `MOM_PROFILE` may also select the startup default; `MOM_LLM_RUNTIME` can override the selected llama.cpp runtime (`cpu`, `cuda12` or `cuda13`). `MOM_PYTHON` can point the launcher at a prepared venv when `MOM_DATA_DIR` is customized. The in-app profile setting applies to new jobs only; a running job retains its saved configuration. New jobs require at least 8 GiB available physical RAM and the profile's free-VRAM reserve; low-memory jobs are refused before loading models. ASR and LLM remain serial with bounded transcript batches. Romanian is the default language; the language selector can choose Romanian, Russian, English or automatic detection. Do not use automatic detection for the Romanian-only comparison run.
 
-Sign in or create the first installation administrator, create a meeting, then upload audio/video or record from the microphone. Microphone chunks are saved as you speak; transcription begins after Stop. Review the transcript and evidence-backed actions, correct passages if needed, reprocess after edits, check the approval box and download the HTML minutes file.
+Sign in or create the first installation administrator, create a meeting, then upload audio/video or record from the microphone. Microphone chunks are saved as you speak; local provisional words appear from complete windows while recording. Stop seals the complete source and runs the final transcript/decision workflow. Review the transcript and evidence-backed actions, correct passages if needed, reprocess after edits, check the approval box and download the HTML minutes file.
 
 ## Offline and performance claims
 
