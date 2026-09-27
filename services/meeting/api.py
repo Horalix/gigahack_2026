@@ -10,15 +10,15 @@ import uuid
 from pathlib import Path
 
 from fastapi import Cookie, Depends, FastAPI, File, Query, Request, Response, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import AuthService, SESSION_COOKIE, SESSION_SECONDS
-from .contracts import CreateAccount, CreateJob, CreateMeeting, CreatePatient, ErrorEnvelope, GrantMeetingAccess, LoginRequest, ReviseSegment, SetAccountActive, SetupRequest, UpdatePatient
+from .contracts import CreateAccount, CreateJob, CreateMeeting, CreatePatient, ErrorEnvelope, FinalizeArtifact, GrantMeetingAccess, LoginRequest, ReviseSegment, SetAccountActive, SetupRequest, UpdatePatient
 from .media import MAX_UPLOAD_BYTES, MediaError, decode
 from .patients import PatientDirectory
-from .storage import Storage
+from .storage import Storage, timestamp
 
 
 DEFAULT_ALLOWED_ORIGINS = {
@@ -73,6 +73,15 @@ def segment_record(row: dict) -> dict:
             "transcriptRevision": row["transcript_revision"], "startMs": row["start_ms"],
             "endMs": row["end_ms"], "text": row["text"], "language": row["language"],
             "speakerClusterId": None, "origin": row["origin"], "words": row["words"]}
+
+
+def artifact_record(row: dict) -> dict:
+    return {"id": row["id"], "organizationId": row["organization_id"],
+            "meetingId": row["meeting_id"], "transcriptRevision": row["transcript_revision"],
+            "storageKey": row["storage_key"], "mimeType": row["mime_type"],
+            "sha256": row["sha256"], "status": row["status"],
+            "approvedBy": row["approved_by"], "approvedAt": row["approved_at"],
+            "createdAt": row["created_at"]}
 
 
 def host_gpu_memory_gb() -> float | None:
@@ -290,10 +299,52 @@ def create_app(data_root: Path | None = None) -> FastAPI:
     @app.get("/api/meetings/{meeting_id}")
     def get_meeting(meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
         meeting = meeting_or_404(meeting_id, actor, db)
+        artifact = db.latest_artifact(meeting_id, actor["organization_id"])
         return {"meeting": meeting_record(meeting, db.meeting_patient_ids(meeting_id, actor["organization_id"])),
                 "asset": asset_record(db.latest_asset(meeting_id, actor["organization_id"])),
                 "segments": [segment_record(row) for row in db.get_segments(meeting_id, actor["organization_id"])],
-                "decisions": db.get_meeting_decisions(meeting_id, actor["organization_id"])}
+                "decisions": db.get_meeting_decisions(meeting_id, actor["organization_id"]),
+                "artifact": artifact_record(artifact) if artifact else None}
+
+    @app.post("/api/meetings/{meeting_id}/artifacts", status_code=201)
+    def finalize_artifact(meeting_id: str, data: FinalizeArtifact,
+                          actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting = meeting_or_404(meeting_id, actor, db, write=True)
+        if actor["role"] == "reviewer":
+            raise ServiceError(403, "ROLE_READ_ONLY", "Reviewer accounts cannot approve output")
+        if not data.confirmHumanReview:
+            raise ServiceError(422, "HUMAN_REVIEW_REQUIRED", "Explicitly confirm that you reviewed the transcript and actions")
+        decisions = db.get_meeting_decisions(meeting_id, actor["organization_id"])
+        if (not decisions or meeting["transcript_revision"] != data.transcriptRevision or
+                decisions.get("transcriptRevision") != data.transcriptRevision):
+            raise ServiceError(409, "ARTIFACT_SNAPSHOT_STALE", "Current transcript and decisions are not ready for approval")
+        from .rendering import render_minutes_html
+        approved_at = timestamp()
+        content = render_minutes_html(meeting, db.get_segments(meeting_id, actor["organization_id"]), decisions,
+                                      reviewer=actor["username"], approved_at=approved_at)
+        artifact = db.create_artifact(meeting_id, actor["organization_id"], actor["id"],
+                                      data.transcriptRevision, decisions, content)
+        if not artifact:
+            raise ServiceError(409, "ARTIFACT_SNAPSHOT_STALE", "Transcript or decisions changed; reload before approval")
+        return {"artifact": artifact_record(artifact)}
+
+    @app.get("/api/artifacts/{artifact_id}/content")
+    def download_artifact(artifact_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        artifact = db.get_artifact(artifact_id, actor["organization_id"])
+        if not artifact or artifact["status"] != "ready":
+            raise ServiceError(404, "ARTIFACT_NOT_FOUND", "Artifact not found")
+        meeting = meeting_or_404(artifact["meeting_id"], actor, db)
+        latest = db.latest_artifact(meeting["id"], actor["organization_id"])
+        if (not latest or latest["id"] != artifact_id or
+                artifact["transcript_revision"] != meeting["transcript_revision"]):
+            raise ServiceError(404, "ARTIFACT_NOT_FOUND", "Artifact not found")
+        try:
+            path = db.artifact_path(artifact["storage_key"])
+        except FileNotFoundError as exc:
+            raise ServiceError(404, "ARTIFACT_NOT_FOUND", "Artifact file not found") from exc
+        if hashlib.sha256(path.read_bytes()).hexdigest() != artifact["sha256"]:
+            raise ServiceError(503, "ARTIFACT_CHECKSUM_FAILED", "The approved artifact failed its integrity check")
+        return FileResponse(path, media_type="text/html", filename=f"notavra-minutes-{artifact_id}.html")
 
     @app.put("/api/meetings/{meeting_id}/segments/{segment_id}")
     def revise_segment(meeting_id: str, segment_id: str, data: ReviseSegment,

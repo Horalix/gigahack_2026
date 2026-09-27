@@ -1,8 +1,10 @@
 """Durable meeting records and a single GPU job lease in SQLite."""
 
 import json
+import hashlib
 import os
 import sqlite3
+import tempfile
 import time
 import uuid
 from contextlib import closing, contextmanager
@@ -12,7 +14,7 @@ from typing import Iterator
 
 
 LEASE_SECONDS = 30
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def default_data_root() -> Path:
@@ -167,6 +169,18 @@ class Storage:
                 )""")
                 db.execute("CREATE INDEX patient_meetings_meeting ON patient_meetings(organization_id,meeting_id,patient_id)")
                 db.execute("PRAGMA user_version=7")
+            if current < 8:
+                db.execute("""CREATE TABLE artifacts (
+                    id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
+                    meeting_id TEXT NOT NULL REFERENCES meetings(id), transcript_revision INTEGER NOT NULL,
+                    decision_sha256 TEXT NOT NULL, storage_key TEXT NOT NULL UNIQUE,
+                    mime_type TEXT NOT NULL, sha256 TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('ready','superseded','revoked')),
+                    approved_by TEXT NOT NULL REFERENCES users(id), approved_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )""")
+                db.execute("CREATE INDEX artifacts_meeting_revision ON artifacts(meeting_id,transcript_revision,created_at)")
+                db.execute("PRAGMA user_version=8")
 
     def asset_path(self, meeting_id: str, asset_id: str, suffix: str) -> Path:
         # IDs are generated locally; never put an uploaded name into a filesystem path.
@@ -222,6 +236,80 @@ class Storage:
             rows = db.execute("SELECT patient_id FROM patient_meetings WHERE meeting_id=? AND organization_id=? ORDER BY patient_id",
                               (meeting_id, organization_id)).fetchall()
             return [row["patient_id"] for row in rows]
+
+    def create_artifact(self, meeting_id: str, organization_id: str, actor_id: str,
+                        transcript_revision: int, decisions: dict, content: bytes) -> dict | None:
+        artifact_id = str(uuid.uuid4())
+        directory = self.root / "artifacts" / meeting_id
+        directory.mkdir(parents=True, exist_ok=True)
+        destination = directory / f"{artifact_id}.html"
+        temporary = None
+        committed = False
+        decision_json = json.dumps(decisions, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        decision_digest = hashlib.sha256(decision_json.encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(content).hexdigest()
+        now = timestamp()
+        try:
+            with tempfile.NamedTemporaryFile(mode="wb", dir=directory, prefix=f".{artifact_id}-", suffix=".tmp", delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            with self.transaction() as db:
+                meeting = db.execute("SELECT transcript_revision FROM meetings WHERE id=? AND organization_id=?",
+                                     (meeting_id, organization_id)).fetchone()
+                permission = db.execute("SELECT permission FROM meeting_grants WHERE meeting_id=? AND organization_id=? AND user_id=?",
+                                        (meeting_id, organization_id, actor_id)).fetchone()
+                decision_row = db.execute("""SELECT d.result_json FROM decision_results d JOIN jobs j
+                    ON j.id=d.job_id AND j.state='ready' JOIN meetings m ON m.id=d.meeting_id
+                    WHERE d.meeting_id=? AND d.organization_id=? AND d.transcript_revision=m.transcript_revision
+                    ORDER BY d.created_at DESC,d.job_id DESC LIMIT 1""", (meeting_id, organization_id)).fetchone()
+                if (not meeting or meeting["transcript_revision"] != transcript_revision or
+                        not permission or permission["permission"] not in {"owner", "editor"} or not decision_row):
+                    return None
+                current_json = json.dumps(json.loads(decision_row["result_json"]), ensure_ascii=False,
+                                          sort_keys=True, separators=(",", ":"))
+                if hashlib.sha256(current_json.encode("utf-8")).hexdigest() != decision_digest:
+                    return None
+                os.replace(temporary, destination)
+                temporary = None
+                row = {"id": artifact_id, "organization_id": organization_id, "meeting_id": meeting_id,
+                       "transcript_revision": transcript_revision, "decision_sha256": decision_digest,
+                       "storage_key": self.relative_key(destination), "mime_type": "text/html; charset=utf-8",
+                       "sha256": digest, "status": "ready", "approved_by": actor_id,
+                       "approved_at": now, "created_at": now}
+                db.execute("""INSERT INTO artifacts
+                    (id,organization_id,meeting_id,transcript_revision,decision_sha256,storage_key,mime_type,sha256,
+                     status,approved_by,approved_at,created_at)
+                    VALUES(:id,:organization_id,:meeting_id,:transcript_revision,:decision_sha256,:storage_key,:mime_type,:sha256,
+                           :status,:approved_by,:approved_at,:created_at)""", row)
+            committed = True
+            return row
+        finally:
+            if temporary:
+                temporary.unlink(missing_ok=True)
+            if not committed:
+                destination.unlink(missing_ok=True)
+
+    def latest_artifact(self, meeting_id: str, organization_id: str) -> dict | None:
+        with closing(self.connect()) as db:
+            row = db.execute("""SELECT a.* FROM artifacts a JOIN meetings m ON m.id=a.meeting_id
+                WHERE a.meeting_id=? AND a.organization_id=? AND a.status='ready'
+                  AND a.transcript_revision=m.transcript_revision
+                ORDER BY a.created_at DESC,a.id DESC LIMIT 1""", (meeting_id, organization_id)).fetchone()
+            return dict(row) if row else None
+
+    def get_artifact(self, artifact_id: str, organization_id: str) -> dict | None:
+        with closing(self.connect()) as db:
+            row = db.execute("SELECT * FROM artifacts WHERE id=? AND organization_id=?",
+                             (artifact_id, organization_id)).fetchone()
+            return dict(row) if row else None
+
+    def artifact_path(self, storage_key: str) -> Path:
+        path = self.resolve_key(storage_key)
+        if not path.is_file():
+            raise FileNotFoundError("Artifact file is missing")
+        return path
 
     def installation_organization(self) -> str:
         with closing(self.connect()) as db:
@@ -389,7 +477,9 @@ class Storage:
         with self.transaction() as db:
             config_json = json.dumps(config, sort_keys=True)
             existing = db.execute("""SELECT * FROM jobs WHERE meeting_id=? AND organization_id=? AND asset_id=?
-                AND (state IN ('queued','running') OR (state='ready' AND model_config_json=?))
+                AND (state IN ('queued','running') OR (state='ready' AND model_config_json=? AND EXISTS (
+                    SELECT 1 FROM decision_results d WHERE d.job_id=jobs.id
+                      AND d.transcript_revision=(SELECT transcript_revision FROM meetings WHERE id=jobs.meeting_id))))
                 ORDER BY created_at DESC LIMIT 1""",
                 (meeting_id, organization_id, asset_id, config_json)).fetchone()
             if existing:
@@ -523,6 +613,8 @@ class Storage:
             db.execute("UPDATE segments SET text=? WHERE id=?", (clean, segment_id))
             db.execute("UPDATE meetings SET transcript_revision=?,status='transcript_review',updated_at=? WHERE id=?",
                        (next_revision, timestamp(), meeting_id))
+            db.execute("UPDATE artifacts SET status='superseded' WHERE meeting_id=? AND status='ready'",
+                       (meeting_id,))
             row = db.execute("SELECT * FROM segments WHERE id=?", (segment_id,)).fetchone()
             item = dict(row)
             item["words"] = json.loads(item.pop("words_json"))

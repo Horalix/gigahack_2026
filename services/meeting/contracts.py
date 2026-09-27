@@ -92,6 +92,13 @@ class UpdatePatient(BaseModel):
     status: Literal["active", "inactive"] | None = None
 
 
+class FinalizeArtifact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    transcriptRevision: int = Field(ge=1)
+    confirmHumanReview: bool
+
+
 class ErrorEnvelope(BaseModel):
     code: str
     message: str
