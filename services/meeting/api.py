@@ -462,7 +462,7 @@ def create_app(data_root: Path | None = None) -> FastAPI:
                             "compatible": compatible, "hostVramGb": gpu_memory,
                             "asrFilesPresent": (asr_path / "model.bin").is_file(),
                             "llmFilePresent": llm_path.is_file()})
-        return {"profiles": choices, "verified": False}
+        return {"profiles": choices, "defaultProfileId": os.environ.get("MOM_PROFILE", "laptop8"), "verified": False}
 
     @app.post("/api/meetings/{meeting_id}/audio", status_code=201)
     async def upload_audio(

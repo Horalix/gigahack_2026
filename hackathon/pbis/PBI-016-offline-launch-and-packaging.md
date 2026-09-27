@@ -42,8 +42,8 @@ SMTP setup, emailing runbooks, OS firewall changes without scoped review, full n
 
 ## Completion record
 
-- Commit / changed files: pending
-- Commands and observed behavior: pending
-- Acceptance evidence / limitations: pending
+- Commit / changed files: `pending`; added PowerShell preflight/start/stop scripts and a concise offline-demo runbook; the selected profile now sets the default profile in the new-meeting flow.
+- Commands and observed behavior: PowerShell parser accepted all three scripts; `preflight.ps1 -ProfileId laptop8` verified the installed pinned ASR/LLM files and found 8 GiB VRAM; Browser mode started API, worker and Vite and returned HTTP 200 from UI and API; Playwright rendered the setup form with no client errors; `stop.ps1` stopped exactly the three recorded helpers and released both ports.
+- Acceptance evidence / limitations: Browser launch works on this laptop with network disconnected not tested. Tauri compilation remains unverified because CMake and `libclang.dll` are not installed here (browser-mode fallback works). Neither offline egress nor a full one-hour transcription pipeline is qualified. Keep this PBI OPEN.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
 

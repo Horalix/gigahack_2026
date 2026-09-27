@@ -134,8 +134,11 @@
   }
 
   async function loadProfiles() {
-    const result = await request<{ profiles: Profile[] }>("/profiles");
+    const result = await request<{ profiles: Profile[]; defaultProfileId?: string }>("/profiles");
     profiles = result.profiles;
+    if (result.defaultProfileId && result.profiles.some((profile) => profile.id === result.defaultProfileId && profile.compatible)) {
+      profileId = result.defaultProfileId;
+    }
   }
 
   async function openMeeting(id: string) {
