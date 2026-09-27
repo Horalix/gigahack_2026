@@ -1,8 +1,8 @@
 # Secure MOM execution backlog
 
-**27 September 2026; implementation checkpoint: `codex/app-completion`, commit `4c69d06`, pushed.** The branch started from current `develop` after Affan's branch was merged. The independent ASR experiment is on `codex/asr-comparison` at `411750d`; merge the completed app branch into it before refreshing the report.
+**27 September 2026; app branch `codex/app-completion` at `c384291`, pushed.** The branch started from current `develop` after Affan's branch was merged. The ASR experiment branch contains the app branch and completed PBI-025 model-selection report.
 
-This index supersedes older task order and owner guesses in individual PBIs. PBIs 001–003 and 005–006 are complete. The app now has a local workbench, searchable/paginated patient directory, upload/job/transcript/action flow, approved HTML artifact, durable microphone chunk capture, transcript edits/undo, local meeting purge and a Windows launch runbook. PBIs 004 and 007–017 remain OPEN where real accuracy, UI, Tauri, one-hour or offline acceptance is unverified; each PBI records what is implemented. The Whisper/OmniASR comparison is experimental and lives on its separate branch until merged. [The live team handoff](../10-team-handoff.md) contains current branch state and integration boundaries. Affan owns SMTP; no mailing code is included here.
+This index supersedes older task order and owner guesses in individual PBIs. PBIs 001–003 and 005–006 are complete; PBI-025's bounded model-selection experiment is also complete. The app now has a local workbench, searchable/paginated patient directory, upload/job/transcript/action flow, approved HTML artifact, durable microphone chunk capture, transcript edits/undo, local meeting purge and a Windows launch runbook. PBIs 004 and 007–017 remain OPEN where real accuracy, UI, Tauri, one-hour or offline acceptance is unverified; each PBI records what is implemented. The Whisper/OmniASR report is on `codex/asr-comparison`; it recommends Whisper large-v3 with Romanian selected for the demo. [The live team handoff](../10-team-handoff.md) contains current branch state and integration boundaries. Affan owns SMTP; no mailing code is included here.
 
 ## Scope and authority
 
@@ -60,9 +60,9 @@ Use [the live handoff](../10-team-handoff.md) for the current parallel order. A 
 | [022 — Prepare the privacy and ethics gate for a real pilot](PBI-022-eu-pilot-privacy-and-ethics.md) | Before real patient use | Luna / High | 001, 005, 015; does not block synthetic demo | OPEN |
 | [023 — Qualify hospital deployment and expansion](PBI-023-hospital-deployment-and-eu-scale.md) | After hackathon / before scaled deployment | Sol / High | 016, 017, 022 | OPEN |
 | [024 — Freeze the release and present measured results](PBI-024-demo-evidence-and-presentation.md) | P0 | Luna / Medium | Draft now; final claims depend on completed P0 and 017 | OPEN |
-| [025 — Compare Whisper and OmniASR on identical Medpark audio](PBI-025-whisper-omniasr-comparison.md) | P0 experiment | Luna / High | 003; consumes 004 baseline, supplies 017 | OPEN |
+| [025 — Compare Whisper and OmniASR on identical Medpark audio](completed/PBI-025-whisper-omniasr-comparison.md) | P0 experiment | Luna / High | 003; consumes 004 baseline, supplies 017 | COMPLETE — single-recording scope |
 
-PBI-025 is a separate core inference/evaluation experiment with concrete local input hashes and an executor runbook. It does not change the production model or replace PBI-017's one-hour end-to-end gate.
+PBI-025 is a bounded core inference/evaluation experiment with concrete local input hashes and a reproducible harness. It does not change the production model or replace PBI-017's one-hour end-to-end gate.
 
 ## Dependencies at a glance
 

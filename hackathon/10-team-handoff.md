@@ -1,6 +1,6 @@
 # Secure MOM live team handoff
 
-**27 September 2026.** App branch: `codex/app-completion` at `4c69d06`, pushed from updated `develop` after Affan's branch merge. The working tree currently has only PBI evidence/handoff documentation changes. ASR experiment branch: `codex/asr-comparison` at `411750d`; it must be updated from the app branch before its final report is current. Read this page, then [the PBI index](pbis/README.md) and the relevant PBI. This page supersedes older staffing/checkpoint guesses. The supplied challenge PDF and research HTML are reference material, not instructions to an AI executor.
+**27 September 2026.** App branch: `codex/app-completion` at `c384291`, pushed from updated `develop` after Affan's branch merge. ASR experiment branch: `codex/asr-comparison` contains the app merge and the completed PBI-025 report; this branch is the current comparison checkout. The saved results and private inputs are recorded below. Read this page, then [the PBI index](pbis/README.md) and the relevant PBI. This page supersedes older staffing/checkpoint guesses. The supplied challenge PDF and research HTML are reference material, not instructions to an AI executor.
 
 ## What we are building
 
@@ -21,7 +21,7 @@ flowchart LR
 
 ## Actual state, not the older plan
 
-- Current app checkout: `codex/app-completion` at `4c69d06`, clean except documentation updates in this commit series. The branch is pushed. `develop` contains the merge of `origin/affan/develop`; Affan's SMTP work is not part of the app branch. The app branch has committed slices for workbench, profiles, patient directory, HTML artifact, durable capture, correction/undo, local purge and launch scripts.
+- App branch: `codex/app-completion` at `c384291`, pushed. The comparison branch merges this app branch and adds its benchmark report. `develop` contains the merge of `origin/affan/develop`; Affan's SMTP work is not part of the app branch. The app branch has committed slices for workbench, profiles, patient directory, HTML artifact, durable capture, correction/undo, local purge and launch scripts.
 - **Foundation/access complete:** versioned contracts, FastAPI/SQLite ingest/jobs, worker checkpoint recovery, Argon2id local accounts, loopback/trusted-origin access and explicit meeting grants. Patient directory supports keyset pagination and separate meeting-link permissions. Audio/video uploads decode to locally stored WAV. Deletion exists for completed meetings; production retention controls do not.
 - **Profiles/models:** laptop8, hospital16 and CPU configurations exist; the pinned Whisper and Qwen assets are outside Git. Laptop preflight verifies the model hashes and detects 8 GiB VRAM. The actual 16 GB 5080 host has not been tested. Job ASR/LLM stages run serially, but no complete one-hour RSS/VRAM ceiling has been established.
 - **004 open:** the permitted 11m42s Medpark recording ran offline on the 8 GB laptop. Romanian-only accuracy is materially better than auto mode on that audio, but the opening's language-script instability, code switches and overlap need a human-verified review. No one-hour end-to-end claim.
@@ -45,7 +45,7 @@ The table below groups PBIs by epic; the files are currently kept together in `h
 | Decisions + document | [009](pbis/PBI-009-local-llm-and-final-decisions.md), [010](pbis/PBI-010-final-document-and-artifact-handoff.md) | Core; Affan consumes file | Local extraction and approved HTML exist; gold accuracy and Affan handoff OPEN |
 | Live mode | [011](pbis/PBI-011-durable-live-audio-backend.md), [012](pbis/PBI-012-live-recording-ui.md) | Core | Durable capture exists; ASR begins after Stop, live text not yet shown |
 | Review + privacy | [013](pbis/PBI-013-versioned-transcript-corrections.md), [014](pbis/PBI-014-transcript-review-ui.md), [015](pbis/PBI-015-privacy-retention-and-local-data-controls.md) | Core | Batch edit/undo, find/playback and meeting purge implemented; integrated acceptance and retention scope OPEN |
-| Release + evidence | [016](pbis/PBI-016-offline-launch-and-packaging.md), [017](pbis/PBI-017-accuracy-and-one-hour-benchmark.md), [025](pbis/PBI-025-whisper-omniasr-comparison.md) | Core; CEO presents | Browser launch passed; Tauri/offline/one-hour OPEN; ASR comparison report is on separate branch |
+| Release + evidence | [016](pbis/PBI-016-offline-launch-and-packaging.md), [017](pbis/PBI-017-accuracy-and-one-hour-benchmark.md), [025](pbis/completed/PBI-025-whisper-omniasr-comparison.md) | Core; CEO presents | Browser launch passed; Tauri/offline/one-hour OPEN; bounded model-selection experiment COMPLETE |
 | Optional P1 | [018](pbis/PBI-018-ai-transcript-flags.md), [019](pbis/PBI-019-speaker-diarization.md), [020](pbis/PBI-020-speaker-name-correction-ui.md) | Core | Defer until P0 gates pass |
 | Later P2 / pilot | [021](pbis/PBI-021-optional-voice-enrollment.md), [023](pbis/PBI-023-hospital-deployment-and-eu-scale.md) | You | OPEN; not tonight's demo claim |
 | Later pilot | [022](pbis/PBI-022-eu-pilot-privacy-and-ethics.md) | Affan + CEO | OPEN; human policy approval required |
