@@ -7,7 +7,7 @@
   type Patient = { id: string; displayName: string; hospitalReference: string | null; status: string; meetings?: { id: string; title: string; recordedAt: string; status: string }[] };
   type Capture = { id: string; state: string; next_sequence: number; received_bytes: number; error_code?: string | null };
   type Profile = { id: string; hardware: { gpu: string; vram_gb: number }; asrFilesPresent: boolean; llmFilePresent: boolean; compatible: boolean };
-  type Detail = { meeting: Meeting; asset: { durationMs: number; decodeWarning?: string } | null; segments: Segment[]; decisions: any; canUndoCorrection: boolean; captures: Capture[]; artifact: { id: string; sha256: string; approvedAt: string; storageKey: string } | null };
+  type Detail = { meeting: Meeting; permission: string; asset: { durationMs: number; decodeWarning?: string } | null; segments: Segment[]; decisions: any; canUndoCorrection: boolean; captures: Capture[]; artifact: { id: string; sha256: string; approvedAt: string; storageKey: string } | null };
 
   let user = $state<User | null>(null);
   let setupRequired = $state(false);
@@ -129,6 +129,16 @@
     detail = await request<Detail>(`/meetings/${id}`);
     editingSegment = null;
     error = "";
+  }
+
+  async function deleteMeeting() {
+    if (!detail || !window.confirm("Permanently remove this meeting, its local audio, transcript, actions, approved files, and patient links? Previously downloaded copies are outside this app.")) return;
+    const id = detail.meeting.id;
+    try {
+      const result = await request<{ pendingFileCleanup: number }>(`/meetings/${id}`, { method: "DELETE" });
+      detail = null; status = result.pendingFileCleanup ? "Meeting removed. Some files are locked and will be retried by the local worker." : "Meeting and app-managed files removed.";
+      await loadMeetings();
+    } catch (e) { showError(e); }
   }
 
   async function saveSegment(segment: Segment) {
@@ -381,7 +391,7 @@
       </aside>
       <section class="content">
         {#if detail}
-          <div class="panel-head"><div><p class="eyebrow">{new Date(detail.meeting.recordedAt).toLocaleString()}</p><h1>{detail.meeting.title}</h1></div><button class="quiet" onclick={() => (detail = null)}>← Meetings</button></div>
+          <div class="panel-head"><div><p class="eyebrow">{new Date(detail.meeting.recordedAt).toLocaleString()}</p><h1>{detail.meeting.title}</h1></div><div class="downloads"><button class="quiet" onclick={() => (detail = null)}>← Meetings</button>{#if detail.permission === "owner"}<button class="quiet" onclick={deleteMeeting}>Delete local meeting data</button>{/if}</div></div>
           {#if detail.asset}<p class="muted">Audio length: {(detail.asset.durationMs / 60000).toFixed(1)} min {#if detail.asset.decodeWarning}<span class="warning">· Audio decode warning</span>{/if}</p>{/if}
           {#each detail.captures as capture (capture.id)}<section class="panel"><h2>Unfinished microphone capture</h2><p>Only acknowledged chunks were saved ({(capture.received_bytes / 1048576).toFixed(1)} MB). The last part of speech may be missing. Process the saved portion or discard it.</p><div class="downloads"><button class="primary" disabled={busy || !capture.next_sequence} onclick={() => processSavedCapture(capture)}>Process saved portion</button><button class="quiet" disabled={busy} onclick={() => discardSavedCapture(capture)}>Discard saved chunks</button></div></section>{/each}
           <section class="panel"><h2>Add recording</h2><p>Upload audio or video, or record through the microphone. Live audio is saved to disk in short parts and processed after you stop. Processing stays local.</p><div class="live-record"><button class:recording class="quiet" type="button" onclick={() => recording ? stopRecording() : startRecording()} disabled={busy}>{recording ? "Stop recording" : "● Record live"}</button>{#if recording}<span class="record-indicator"><i></i> Recording · {formatElapsed(recordingSeconds)} · saving locally</span>{/if}</div><form class="upload-form" onsubmit={upload}>

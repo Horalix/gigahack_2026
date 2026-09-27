@@ -302,12 +302,28 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         meeting = meeting_or_404(meeting_id, actor, db)
         artifact = db.latest_artifact(meeting_id, actor["organization_id"])
         return {"meeting": meeting_record(meeting, db.meeting_patient_ids(meeting_id, actor["organization_id"])),
+                "permission": db.meeting_permission(meeting_id, actor["id"], actor["organization_id"]),
                 "asset": asset_record(db.latest_asset(meeting_id, actor["organization_id"])),
                 "segments": [segment_record(row) for row in db.get_segments(meeting_id, actor["organization_id"])],
                 "decisions": db.get_meeting_decisions(meeting_id, actor["organization_id"]),
                 "canUndoCorrection": db.can_undo_transcript_revision(meeting_id, actor["organization_id"], meeting["transcript_revision"]),
                 "captures": db.list_open_captures(meeting_id, actor["organization_id"]),
                 "artifact": artifact_record(artifact) if artifact else None}
+
+    @app.delete("/api/meetings/{meeting_id}")
+    def purge_meeting(meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):
+        meeting_or_404(meeting_id, actor, db)
+        if db.meeting_permission(meeting_id, actor["id"], actor["organization_id"]) != "owner":
+            raise ServiceError(403, "MEETING_OWNER_REQUIRED", "Only the meeting owner can delete this meeting")
+        try:
+            pending_files = db.purge_meeting(meeting_id, actor["organization_id"], actor["id"])
+        except RuntimeError as exc:
+            if str(exc) == "MEETING_PROCESSING":
+                raise ServiceError(409, "MEETING_PROCESSING", "Stop or wait for active processing before deleting this meeting") from exc
+            raise
+        if pending_files is None:
+            raise ServiceError(404, "MEETING_NOT_FOUND", "Meeting not found")
+        return {"ok": True, "pendingFileCleanup": pending_files}
 
     @app.post("/api/meetings/{meeting_id}/artifacts", status_code=201)
     def finalize_artifact(meeting_id: str, data: FinalizeArtifact,

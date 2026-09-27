@@ -15,7 +15,7 @@ from typing import Iterator
 
 LEASE_SECONDS = 30
 MAX_CAPTURE_BYTES = 2 * 1024 * 1024 * 1024
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def default_data_root() -> Path:
@@ -199,6 +199,17 @@ class Storage:
                     PRIMARY KEY(session_id,sequence)
                 )""")
                 db.execute("PRAGMA user_version=9")
+            if current < 10:
+                db.execute("""CREATE TABLE deletion_audit (
+                    id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, actor_id TEXT NOT NULL,
+                    subject_type TEXT NOT NULL, subject_id TEXT NOT NULL, action TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )""")
+                db.execute("CREATE INDEX deletion_audit_org_time ON deletion_audit(organization_id,created_at)")
+                db.execute("""CREATE TABLE file_cleanup (
+                    storage_key TEXT PRIMARY KEY, queued_at TEXT NOT NULL
+                )""")
+                db.execute("PRAGMA user_version=10")
 
     def asset_path(self, meeting_id: str, asset_id: str, suffix: str) -> Path:
         # IDs are generated locally; never put an uploaded name into a filesystem path.
@@ -328,6 +339,83 @@ class Storage:
         if not path.is_file():
             raise FileNotFoundError("Artifact file is missing")
         return path
+
+    def purge_meeting(self, meeting_id: str, organization_id: str, actor_id: str) -> int | None:
+        """Revoke a meeting and all app-managed derivatives; return cleanup queue size."""
+        with self.transaction() as db:
+            meeting = db.execute("""SELECT m.id,g.permission FROM meetings m JOIN meeting_grants g
+                ON g.meeting_id=m.id AND g.organization_id=m.organization_id
+                WHERE m.id=? AND m.organization_id=? AND g.user_id=?""",
+                (meeting_id, organization_id, actor_id)).fetchone()
+            if not meeting or meeting["permission"] != "owner":
+                return None
+            db.execute("UPDATE jobs SET state='cancelled',stage='cancelled',lease_owner=NULL,lease_until=NULL,updated_at=? WHERE meeting_id=? AND state='queued'",
+                       (timestamp(), meeting_id))
+            active = db.execute("SELECT 1 FROM jobs WHERE meeting_id=? AND state='running' LIMIT 1",
+                                (meeting_id,)).fetchone()
+            if active:
+                # In-flight model processes may still hold source files open. Refuse deletion
+                # until inference reaches its next lease check and releases those files.
+                raise RuntimeError("MEETING_PROCESSING")
+            job_ids = [row["id"] for row in db.execute("SELECT id FROM jobs WHERE meeting_id=?", (meeting_id,))]
+            paths = set()
+            for row in db.execute("SELECT source_key,decoded_key FROM assets WHERE meeting_id=?", (meeting_id,)):
+                paths.update((row["source_key"], row["decoded_key"]))
+            asset_directory = self.assets_dir / meeting_id
+            if asset_directory.is_dir():
+                paths.update(self.relative_key(path) for path in asset_directory.rglob("*") if path.is_file())
+            for job_id in job_ids:
+                paths.add(self.relative_key(self.asset_path(meeting_id, job_id, ".transcript.json")))
+            paths.update(row["storage_key"] for row in db.execute(
+                "SELECT storage_key FROM artifacts WHERE meeting_id=?", (meeting_id,)))
+            for capture in db.execute("SELECT id FROM capture_sessions WHERE meeting_id=?", (meeting_id,)):
+                directory = self.root / "captures" / capture["id"]
+                if directory.is_dir():
+                    paths.update(self.relative_key(path) for path in directory.iterdir() if path.is_file())
+            db.execute("DELETE FROM segment_revisions WHERE meeting_id=?", (meeting_id,))
+            db.execute("DELETE FROM segments WHERE meeting_id=?", (meeting_id,))
+            db.execute("DELETE FROM artifacts WHERE meeting_id=?", (meeting_id,))
+            db.execute("DELETE FROM capture_sessions WHERE meeting_id=?", (meeting_id,))
+            db.execute("DELETE FROM jobs WHERE meeting_id=?", (meeting_id,))
+            db.execute("DELETE FROM assets WHERE meeting_id=?", (meeting_id,))
+            db.execute("DELETE FROM patient_meetings WHERE meeting_id=?", (meeting_id,))
+            db.execute("DELETE FROM meeting_grants WHERE meeting_id=?", (meeting_id,))
+            db.execute("DELETE FROM meetings WHERE id=?", (meeting_id,))
+            for key in paths:
+                db.execute("INSERT OR IGNORE INTO file_cleanup(storage_key,queued_at) VALUES(?,?)",
+                           (key, timestamp()))
+            db.execute("""INSERT INTO deletion_audit
+                (id,organization_id,actor_id,subject_type,subject_id,action,created_at)
+                VALUES(?,?,?,?,?,?,?)""",
+                (str(uuid.uuid4()), organization_id, actor_id, "meeting", meeting_id, "purge_requested", timestamp()))
+        return self.flush_file_cleanup()
+
+    def flush_file_cleanup(self) -> int:
+        """Best-effort unlink queued files; locked files remain queued for retry."""
+        removed = 0
+        with closing(self.connect()) as db:
+            keys = [row["storage_key"] for row in db.execute("SELECT storage_key FROM file_cleanup")]
+        for key in keys:
+            try:
+                self.resolve_key(key).unlink(missing_ok=True)
+            except (OSError, ValueError):
+                continue
+            with self.transaction() as db:
+                db.execute("DELETE FROM file_cleanup WHERE storage_key=?", (key,))
+            removed += 1
+        for parent in (self.root / "artifacts", self.root / "captures", self.assets_dir):
+            if parent.exists():
+                for directory in sorted((path for path in parent.rglob("*") if path.is_dir()), reverse=True):
+                    try:
+                        directory.rmdir()
+                    except OSError:
+                        pass
+        with closing(self.connect()) as db:
+            pending = db.execute("SELECT COUNT(*) FROM file_cleanup").fetchone()[0]
+        if pending == 0:
+            with closing(self.connect()) as db:
+                db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return pending
 
     def installation_organization(self) -> str:
         with closing(self.connect()) as db:

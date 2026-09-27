@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 
 
 def run_once(store: Storage, worker_id: str | None = None) -> bool:
+    store.flush_file_cleanup()
     owner = worker_id or str(uuid.uuid4())
     job = store.claim_job(owner)
     if job is None:
@@ -47,6 +48,7 @@ def run_once(store: Storage, worker_id: str | None = None) -> bool:
     finally:
         stopped.set()
         thread.join(timeout=6)
+        store.flush_file_cleanup()
     return True
 
 
