@@ -1,6 +1,6 @@
 # Model switching and the 900-second budget
 
-**Plan plus current experiment evidence; see [ASR comparison results](ASR_COMPARISON_RESULTS.md) and the [PBI index](pbis/README.md) for live status.** Confirmed by the user: RTX 3070 Ti Mobile with 8 GB VRAM and 24 GB system RAM; remote RTX 5080 with 16 GB VRAM available for comparison. Laptop Whisper batch 2 has run twice on the same 702.5s Romanian sample (46.7s, 51.64% WER, 35.28% CER, 4,539 MiB observed device-wide peak). The 5080 host and a full one-hour pipeline remain untested; the reported 12.2 min/hour value is a stage-sum projection.
+**Plan plus current experiment evidence; see [ASR comparison results](ASR_COMPARISON_RESULTS.md) and the [PBI index](pbis/README.md) for live status.** Confirmed by the user: RTX 3070 Ti Mobile with 8 GB VRAM and 24 GB system RAM; remote RTX 5080 with 16 GB VRAM available for comparison. Laptop Whisper batch 2 has run twice on the same 702.5s Romanian sample (46.7s, 51.64% WER, 35.28% CER, 4,539 MiB observed device-wide peak). The integrated laptop8 app then reached `ready` on the M4A in 123s (upload/decode, ASR and decisions), a 10.5 min/hour projection. The 5080 host and a full one-hour pipeline remain untested.
 
 ## Make configuration switchable
 

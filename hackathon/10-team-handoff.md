@@ -6,7 +6,7 @@
 
 Notavra is a local hospital-meeting assistant: upload audio/video or record from the microphone, transcribe RO/RU/EN, extract decisions/actions with quote evidence and unresolved owners/dates, allow corrections, then produce a clinician-approved HTML file. A doctor has a searchable/paginated patient directory and meeting workspace. Affan owns SMTP and attaches the output file on his path; no SMTP implementation is in this branch. The old floating subtitle window is not part of this workflow. The current laptop8 batch-2 integrated app completed the 702.6-second Romanian audio through `ready` in 123.0 seconds, a 10.5-minute/hour sample projection. The full-hour <=15-minute gate remains unverified.
 
-Security is pass/fail: no external ASR/LLM API at runtime; real patient data needs access control and stays outside Git/OneDrive. Today's prototype does not establish GDPR or clinical deployment approval. The CEO owns the pitch and evidence claims. The latest laptop ASR+LLM stage-sum projects to 20 minutes/hour, so the 15-minute gate is currently missed and remains unverified on a full-hour recording.
+Security is pass/fail: no external ASR/LLM API at runtime; real patient data needs access control and stays outside Git/OneDrive. Today's prototype does not establish GDPR or clinical deployment approval. The CEO owns the pitch and evidence claims. The current laptop8 batch-2 integrated app took 123s for 702.6s audio, projecting to 10.5 minutes/hour; a full-hour run is still required to qualify the 15-minute target.
 
 ```mermaid
 flowchart LR
