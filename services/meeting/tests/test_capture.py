@@ -5,6 +5,45 @@ from services.meeting.tests.test_access import logged_in
 from services.meeting.tests.test_jobs import client, meeting, short_wav
 
 
+def test_live_preview_returns_only_owned_source_timed_segments(tmp_path, monkeypatch):
+    from services.meeting import models
+
+    api = client(tmp_path, monkeypatch)
+    meeting_id = meeting(api)
+    capture_id = api.post(f"/api/meetings/{meeting_id}/captures", json={"contentType": "audio/webm"}).json()["id"]
+    monkeypatch.setattr(models, "resolve_profile", lambda *_args, **_kwargs: {
+        "profile_id": "laptop8", "limits": {"min_available_ram_gb": 4},
+        "models": {"asr": {"device": "cpu", "path": "synthetic"}},
+    })
+    monkeypatch.setattr(models, "validate_assets", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("services.meeting.adapters.asr.transcribe_audio", lambda _path, asset, _config: {
+        "segments": [
+            {"id": "inside", "startMs": asset["source_offset_ms"], "endMs": asset["duration_ms"], "text": "Bună ziua", "language": "ro"},
+            {"id": "outside", "startMs": asset["source_offset_ms"] + 500, "endMs": asset["duration_ms"], "text": "overlap duplicate", "language": "ro"},
+        ],
+        "metrics": {"wallSeconds": 0.2},
+    })
+
+    response = api.post(f"/api/captures/{capture_id}/preview?profileId=laptop8&language=ro&start_ms=0&ownershipStartMs=0&ownershipEndMs=600",
+                        content=short_wav(), headers={"Content-Type": "audio/wav"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [segment["id"] for segment in body["segments"]] == ["inside"]
+    assert body["segments"][0]["startMs"] == 0
+    assert body["ownershipEndMs"] == 600
+    assert list((tmp_path / "temporary").glob("*.wav")) == []
+
+
+def test_live_preview_rejects_wrong_audio_format(tmp_path, monkeypatch):
+    api = client(tmp_path, monkeypatch)
+    meeting_id = meeting(api)
+    capture_id = api.post(f"/api/meetings/{meeting_id}/captures", json={"contentType": "audio/webm"}).json()["id"]
+    response = api.post(f"/api/captures/{capture_id}/preview?profileId=laptop8&language=ro&start_ms=0&ownershipStartMs=0&ownershipEndMs=1000",
+                        content=b"not a wav", headers={"Content-Type": "audio/wav"})
+    assert response.status_code == 422
+    assert response.json()["code"] == "PREVIEW_AUDIO_INVALID"
+
+
 def test_ordered_capture_persists_chunks_and_seals_valid_media(tmp_path, monkeypatch):
     api = client(tmp_path, monkeypatch)
     meeting_id = meeting(api)

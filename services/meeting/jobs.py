@@ -8,6 +8,7 @@ import time
 import uuid
 
 from .pipeline import process_job
+from .inference_lock import inference_device_lock
 from .storage import Storage
 
 
@@ -37,7 +38,8 @@ def run_once(store: Storage, worker_id: str | None = None) -> bool:
     thread = threading.Thread(target=renew, name="meeting-job-heartbeat", daemon=True)
     thread.start()
     try:
-        process_job(store, job, owner)
+        with inference_device_lock(store.root, wait_seconds=60 * 60):
+            process_job(store, job, owner)
         if lost_lease.is_set() or not store.finish_job(job["id"], owner, "ready"):
             raise RuntimeError("Job lease was lost before completion")
     except Exception as exc:

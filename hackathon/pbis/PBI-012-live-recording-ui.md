@@ -43,8 +43,9 @@ Background recording after browser closes, speaker enrollment, native overlay fu
 
 - Commit / changed files: `00a5730`, `0fb96f0`; main-app microphone recording now uploads acknowledged browser chunks to the local service and resumes/declares saved partial captures after interruption.
 - Commands and observed behavior: capture API tests cover durable sequence writes, duplicate retries, gap rejection, restart recovery, WAV sealing and access isolation; Svelte check/build pass.
-- Acceptance evidence / limitations: the original implementation established safe local capture and final processing. The follow-up below adds meter and confirmed-chunk status, but capture still transcribes only after Stop and a physical microphone run has not been performed.
+- Acceptance evidence / limitations: the original implementation established safe local capture and final processing. The follow-ups below add a meter, confirmed-chunk status and inline provisional words; a physical microphone run has not been performed.
 - Follow-up on `codex/notavra-finalization`: recording UI now displays a microphone level meter and counts acknowledged versus pending durable chunks. A mocked microphone/browser flow verifies level updates, chunk acknowledgment, Stop and final transcript processing. `npm run check`, `npm run test:ui` (4 passed) and `npm run build` pass.
-- PBI remains OPEN: the browser mic is mocked; real-device recording is not verified, and transcript words still appear only after Stop and ASR processing. No provisional/live words are shown yet.
+- Follow-up on `codex/notavra-finalization`: mic PCM is resampled to bounded 20-second mono/16 kHz windows with 2-second overlap. Local Whisper returns source-timed provisional words inline while MediaRecorder continues saving the full source. Inference is serialized with file jobs and preview lag never stalls or drops the durable recording. The mocked UI flow now verifies provisional words appear before Stop.
+- PBI remains OPEN: the browser mic is mocked; real-device recording, permission loss and preview timing on target GPUs are unverified. Final ASR still reprocesses the full source.
 - Move to `hackathon/pbis/completed/` only after acceptance passes; update index links and this record. Do not mark complete based on mocked success alone.
 

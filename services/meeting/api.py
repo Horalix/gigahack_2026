@@ -7,6 +7,8 @@ import json
 import os
 import subprocess
 import uuid
+import wave
+import io
 from pathlib import Path
 
 from fastapi import Cookie, Depends, FastAPI, File, Query, Request, Response, UploadFile
@@ -17,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import AuthService, SESSION_COOKIE, SESSION_SECONDS
 from .contracts import CreateAccount, CreateCapture, CreateJob, CreateMeeting, CreatePatient, ErrorEnvelope, FinalizeArtifact, GrantMeetingAccess, LoginRequest, ReviseSegment, ReviseSegments, SealCapture, SetAccountActive, SetupRequest, UndoTranscriptRevision, UpdatePatient
 from .capture import CaptureError, seal_capture
+from .inference_lock import InferenceBusy, inference_device_lock
 from .media import MAX_UPLOAD_BYTES, MediaError, decode
 from .patients import PatientDirectory
 from .storage import Storage, timestamp
@@ -634,6 +637,93 @@ def create_app(data_root: Path | None = None) -> FastAPI:
         except CaptureError as exc:
             raise ServiceError(exc.status, exc.code, str(exc), retryable=exc.status >= 500) from exc
         return {"asset": asset_record(asset), "state": "sealed"}
+
+    @app.post("/api/captures/{capture_id}/preview")
+    async def preview_capture_window(capture_id: str, request: Request,
+                                     profile_id: str = Query(alias="profileId"),
+                                     language: str = Query(), start_ms: int = Query(ge=0),
+                                     ownership_start_ms: int = Query(alias="ownershipStartMs", ge=0),
+                                     ownership_end_ms: int = Query(alias="ownershipEndMs", gt=0),
+                                     actor: dict = Depends(principal), db: Storage = Depends(store)):
+        capture = db.get_capture_session(capture_id, actor["organization_id"])
+        if not capture or capture["state"] != "capturing":
+            raise ServiceError(404, "CAPTURE_NOT_FOUND", "Active capture not found")
+        meeting_or_404(capture["meeting_id"], actor, db, write=True)
+        if language not in {"ro", "ru", "en", "auto"}:
+            raise ServiceError(422, "LANGUAGE_UNSUPPORTED", "Select Romanian, Russian, English or automatic detection")
+        if request.headers.get("content-type", "").split(";", 1)[0].strip().casefold() != "audio/wav":
+            raise ServiceError(415, "PREVIEW_FORMAT_UNSUPPORTED", "Live preview must be a mono 16 kHz PCM WAV window")
+        payload = bytearray()
+        async for part in request.stream():
+            payload.extend(part)
+            if len(payload) > 1_000_000:
+                raise ServiceError(413, "PREVIEW_WINDOW_TOO_LARGE", "Live preview windows are limited to 30 seconds")
+        try:
+            with wave.open(io.BytesIO(payload), "rb") as wav:
+                frames = wav.getnframes()
+                if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate(), wav.getcomptype()) != (1, 2, 16000, "NONE"):
+                    raise ValueError("Expected mono 16 kHz PCM16 audio")
+                duration_ms = round(frames * 1000 / 16000)
+                if frames < 16000 or frames > 30 * 16000:
+                    raise ValueError("Window must be between one and 30 seconds")
+                if len(wav.readframes(frames)) != frames * 2:
+                    raise ValueError("PCM audio window is truncated")
+        except (EOFError, wave.Error, ValueError) as exc:
+            raise ServiceError(422, "PREVIEW_AUDIO_INVALID", str(exc)) from exc
+        window_end = start_ms + duration_ms
+        if ownership_start_ms < start_ms or ownership_end_ms > window_end or ownership_end_ms <= ownership_start_ms:
+            raise ServiceError(422, "PREVIEW_OFFSET_INVALID", "Preview ownership offsets must fit within the audio window")
+
+        from .models import ModelAssetError, validate_assets, resolve_profile
+        from .adapters.asr import ASRError, transcribe_audio
+        try:
+            config = resolve_profile(profile_id, overrides={"asr": {"language": language}})
+            minimum_ram = float(config.get("limits", {}).get("min_available_ram_gb", 8))
+            available_ram = host_available_memory_gb()
+            if available_ram is None or available_ram < minimum_ram:
+                raise ServiceError(503, "SYSTEM_MEMORY_LOW", "Not enough free RAM for live recognition")
+            asr = config["models"]["asr"]
+            if asr.get("device") == "cuda":
+                required_vram = float(config["limits"].get("max_vram_gb", 0))
+                gpu_memory = host_gpu_memory_gb()
+                if gpu_memory is None or gpu_memory < required_vram:
+                    raise ServiceError(422, "PROFILE_INCOMPATIBLE", "Selected profile requires a compatible NVIDIA GPU")
+                minimum_free_vram = float(config["limits"].get("min_free_vram_gb", 0))
+                free_vram = host_gpu_free_memory_gb()
+                if free_vram is None or free_vram < minimum_free_vram:
+                    raise ServiceError(503, "GPU_MEMORY_LOW", "Not enough free GPU memory for live recognition")
+                from .cuda_runtime import configure_cuda_dll_search
+                ready, reason = configure_cuda_dll_search()
+                if not ready:
+                    raise ServiceError(503, "ASR_CUDA_RUNTIME_MISSING", reason or "CUDA runtime libraries are missing")
+            validate_assets(config, kinds=("asr",))
+            preview_dir = db.root / "temporary"
+            preview_dir.mkdir(parents=True, exist_ok=True)
+            preview_path = preview_dir / f"{uuid.uuid4()}.wav"
+            try:
+                preview_path.write_bytes(payload)
+                with inference_device_lock(db.root):
+                    result = await asyncio.to_thread(
+                        transcribe_audio, preview_path,
+                        {"id": capture["asset_id"], "duration_ms": window_end, "source_offset_ms": start_ms},
+                        config)
+            finally:
+                preview_path.unlink(missing_ok=True)
+        except InferenceBusy as exc:
+            raise ServiceError(409, "LIVE_PREVIEW_BUSY", "Live recognition is busy; the saved recording is unaffected", retryable=True) from exc
+        except ModelAssetError as exc:
+            raise ServiceError(503, "MODEL_NOT_READY", "The selected local ASR model is missing or corrupt") from exc
+        except ASRError as exc:
+            raise ServiceError(503, exc.code, str(exc), retryable=True) from exc
+        except (ValueError, KeyError, FileNotFoundError) as exc:
+            raise ServiceError(422, "PROFILE_UNAVAILABLE", str(exc)) from exc
+        except OSError as exc:
+            raise ServiceError(507, "PREVIEW_STORAGE_UNAVAILABLE", "The temporary preview window could not be stored") from exc
+        owned = [segment for segment in result["segments"]
+                 if ownership_start_ms <= (segment["startMs"] + segment["endMs"]) // 2 < ownership_end_ms]
+        return {"segments": owned, "startMs": start_ms, "endMs": window_end,
+                "ownershipStartMs": ownership_start_ms, "ownershipEndMs": ownership_end_ms,
+                "wallSeconds": result["metrics"]["wallSeconds"]}
 
     @app.post("/api/meetings/{meeting_id}/jobs", status_code=202)
     def create_job(data: CreateJob, meeting_id: str, actor: dict = Depends(principal), db: Storage = Depends(store)):

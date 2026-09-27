@@ -55,6 +55,9 @@ async function installApi(page, { setupRequired = true, failedJob = false } = {}
     }
     if (path === "/meetings/meeting-1/captures" && method === "POST") return json({ id: "capture-1", state: "capturing", nextSequence: 0 }, 201);
     if (path === "/captures/capture-1/chunks/0" && method === "PUT") return json({ nextSequence: 1, receivedBytes: 5 }, 201);
+    if (path === "/captures/capture-1/preview" && method === "POST") return json({
+      segments: [{ id: "preview-seg-1", startMs: 1000, endMs: 3000, text: "Bună ziua, doamnă doctor.", language: "ro" }], wallSeconds: 0.5,
+    });
     if (path === "/captures/capture-1/seal" && method === "POST") { uploaded = true; return json({ id: "asset-1", durationMs: 1000 }, 201); }
     if (path === "/patients" && method === "GET") {
       const q = (url.searchParams.get("q") || "").toLowerCase();
@@ -164,12 +167,19 @@ test("doctor can retry a failed local extraction from the meeting", async ({ pag
 test("microphone capture shows input level and confirmed local chunks", async ({ page }) => {
   await installApi(page);
   await page.addInitScript(() => {
+    /** @type {any} */ let previewProcessor;
+    Object.defineProperty(window, "__emitPreviewAudio", { configurable: true, value: () => {
+      const samples = new Float32Array(20 * 16000); samples.fill(0.1);
+      previewProcessor?.onaudioprocess?.({ inputBuffer: { getChannelData: () => samples } });
+    } });
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) } });
     class FakeAudioContext {
       state = "running";
+      sampleRate = 16000;
       destination = {};
       createAnalyser() { return { fftSize: 256, connect() {}, disconnect() {}, getByteTimeDomainData(/** @type {Uint8Array} */ samples) { samples.fill(128); samples[0] = 220; } }; }
       createMediaStreamSource() { return { connect() {} }; }
+      createScriptProcessor() { previewProcessor = { connect() {}, disconnect() {}, onaudioprocess: null }; return previewProcessor; }
       createGain() { return { gain: { value: 1 }, connect() {} }; }
       resume() { return Promise.resolve(); }
       close() { this.state = "closed"; return Promise.resolve(); }
@@ -203,6 +213,9 @@ test("microphone capture shows input level and confirmed local chunks", async ({
   await expect(meter).toBeVisible();
   await expect.poll(() => meter.evaluate((element) => Number(/** @type {HTMLMeterElement} */ (element).value))).toBeGreaterThan(0);
   await expect(page.getByText("1 chunk saved · 0 pending")).toBeVisible();
+  await page.evaluate(() => /** @type {any} */ (window).__emitPreviewAudio());
+  await expect(page.getByText("Bună ziua, doamnă doctor.")).toBeVisible();
+  await expect(page.getByText("Live transcript", { exact: false })).toBeVisible();
   await page.getByRole("button", { name: "Stop recording" }).click();
   await expect(page.getByText("Transcript and decisions are ready for review.")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText("Pacientul va reveni luni.").first()).toBeVisible();

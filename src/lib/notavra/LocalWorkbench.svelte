@@ -35,6 +35,8 @@
   let recording = $state(false);
   let recordingSeconds = $state(0);
   let microphoneLevel = $state(0);
+  let liveSegments = $state<Segment[]>([]);
+  let livePreviewStatus = $state("");
   let acknowledgedCaptureChunks = $state(0);
   let captureId: string | undefined;
   let nextCaptureSequence = 0;
@@ -46,6 +48,13 @@
   let mediaStream: MediaStream | undefined;
   let audioContext: AudioContext | undefined;
   let audioAnalyser: AnalyserNode | undefined;
+  let previewProcessor: ScriptProcessorNode | undefined;
+  let previewSamples: number[] = [];
+  let previewStartSample = 0;
+  let previewWindowIndex = 0;
+  let previewInFlight = false;
+  let previewSkipped = false;
+  let previewTask: Promise<void> = Promise.resolve();
   let audioMeterTimer: ReturnType<typeof setInterval> | undefined;
   let recordingTimer: ReturnType<typeof setInterval> | undefined;
   let editingSegment = $state<string | null>(null);
@@ -370,10 +379,95 @@
     audioMeterTimer = undefined;
     audioAnalyser?.disconnect();
     audioAnalyser = undefined;
+    previewProcessor?.disconnect();
+    previewProcessor = undefined;
     const context = audioContext;
     audioContext = undefined;
     if (context && context.state !== "closed") void context.close().catch(() => undefined);
     microphoneLevel = 0;
+  }
+
+  function pcmWindowWav(samples: number[]) {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+    const write = (offset: number, value: string) => { for (let index = 0; index < value.length; index += 1) view.setUint8(offset + index, value.charCodeAt(index)); };
+    write(0, "RIFF"); view.setUint32(4, 36 + samples.length * 2, true); write(8, "WAVE");
+    write(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true); view.setUint32(24, 16000, true); view.setUint32(28, 32000, true);
+    view.setUint16(32, 2, true); view.setUint16(34, 16, true); write(36, "data"); view.setUint32(40, samples.length * 2, true);
+    for (let index = 0; index < samples.length; index += 1) view.setInt16(44 + index * 2, samples[index], true);
+    return new Blob([buffer], { type: "audio/wav" });
+  }
+
+  async function sendPreviewWindow(samples: number[], startSample: number, ownedEndMs: number) {
+    const sessionId = captureId;
+    if (!sessionId || samples.length < 16000) return;
+    const startMs = Math.round(startSample * 1000 / 16000);
+    const durationMs = Math.round(samples.length * 1000 / 16000);
+    const endMs = startMs + durationMs;
+    const params = new URLSearchParams({ profileId, language, start_ms: String(startMs),
+      ownershipStartMs: String(startMs), ownershipEndMs: String(Math.min(ownedEndMs, endMs)) });
+    try {
+      const result = await request<{ segments: Segment[]; wallSeconds: number }>(`/captures/${sessionId}/preview?${params}`, {
+        method: "POST", body: pcmWindowWav(samples), headers: { "Content-Type": "audio/wav" },
+      });
+      const windowIndex = previewWindowIndex++;
+      liveSegments = [...liveSegments, ...result.segments.map((segment) => ({
+        ...segment, id: `${sessionId}-preview-${windowIndex}-${segment.id}`,
+      }))];
+      livePreviewStatus = previewSkipped ? "Live preview resumed after a delay; skipped audio remains in the saved recording." : "Local preview · provisional";
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Live preview unavailable";
+      livePreviewStatus = message.includes("busy") ? "Live preview paused while the local model is busy; full audio is still being saved." : `Live preview paused: ${message}`;
+    }
+  }
+
+  function startLivePreview(stream: MediaStream) {
+    if (!audioContext) return;
+    try {
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      const silentOutput = audioContext.createGain();
+      silentOutput.gain.value = 0;
+      source.connect(processor);
+      processor.connect(silentOutput);
+      silentOutput.connect(audioContext.destination);
+      previewProcessor = processor;
+      previewSamples = []; previewStartSample = 0; previewWindowIndex = 0; previewInFlight = false; previewSkipped = false;
+      liveSegments = []; livePreviewStatus = "Waiting for the first 18 seconds of speech…";
+      processor.onaudioprocess = (event) => {
+        const input = event.inputBuffer.getChannelData(0);
+        const ratio = audioContext!.sampleRate / 16000;
+        for (let at = 0; at < input.length; at += ratio) {
+          const sample = Math.max(-1, Math.min(1, input[Math.floor(at)]));
+          previewSamples.push(sample < 0 ? Math.round(sample * 32768) : Math.round(sample * 32767));
+        }
+        while (previewSamples.length >= 20 * 16000) {
+          const window = previewSamples.slice(0, 20 * 16000);
+          const start = previewStartSample;
+          previewSamples.splice(0, 18 * 16000);
+          previewStartSample += 18 * 16000;
+          if (previewInFlight) { previewSkipped = true; continue; }
+          previewInFlight = true;
+          livePreviewStatus = "Recognizing a complete local audio window…";
+          previewTask = sendPreviewWindow(window, start, start + 18 * 1000)
+            .finally(() => { previewInFlight = false; });
+        }
+      };
+    } catch {
+      livePreviewStatus = "Live preview is unavailable; the full recording is still being saved.";
+    }
+  }
+
+  async function finishLivePreview() {
+    previewProcessor?.disconnect();
+    previewProcessor = undefined;
+    await previewTask;
+    if (previewSamples.length >= 16000 && !previewInFlight) {
+      const tail = previewSamples;
+      previewSamples = [];
+      await sendPreviewWindow(tail, previewStartSample, previewStartSample * 1000 / 16000 + tail.length * 1000 / 16000);
+    }
   }
 
   async function startRecording() {
@@ -389,6 +483,7 @@
         method: "POST", body: JSON.stringify({ contentType: mimeType }),
       });
       captureId = session.id;
+      startLivePreview(mediaStream);
       recorder.ondataavailable = (event) => {
         if (!event.data.size) return;
         const sequence = nextCaptureSequence++;
@@ -410,7 +505,6 @@
           .finally(() => pendingChunkUploads = Math.max(0, pendingChunkUploads - 1));
       };
       recorder.onstop = () => {
-        stopMicrophoneMeter();
         mediaStream?.getTracks().forEach((track) => track.stop());
         mediaStream = undefined;
         void finishRecording();
@@ -424,6 +518,8 @@
   async function finishRecording() {
     const sessionId = captureId;
     if (!sessionId) return;
+    await finishLivePreview();
+    stopMicrophoneMeter();
     await chunkUpload;
     if (!nextCaptureSequence) {
       await request(`/captures/${sessionId}`, { method: "DELETE" }).catch(() => undefined);
@@ -481,6 +577,7 @@
         status = job.state === "ready" ? "Transcript and decisions are ready for review." : job.state === "failed" ? `Processing failed: ${job.errorCode || "unknown error"}` : `${job.stage}: ${job.state}…`;
         if (job.state === "ready" || job.state === "failed") {
           stopPolling(); busy = false;
+          liveSegments = []; livePreviewStatus = "";
           if (detail) await openMeeting(detail.meeting.id);
           await loadMeetings();
         }
@@ -538,7 +635,7 @@
           <div class="panel-head"><div><p class="eyebrow">{new Date(detail.meeting.recordedAt).toLocaleString()}</p><h1>{detail.meeting.title}</h1></div><div class="downloads"><button class="quiet" onclick={() => (detail = null)}>← Meetings</button>{#if detail.permission === "owner"}<button class="quiet" onclick={deleteMeeting}>Delete local meeting data</button>{/if}</div></div>
           {#if detail.asset}<p class="muted">Audio length: {(detail.asset.durationMs / 60000).toFixed(1)} min {#if detail.asset.decodeWarning}<span class="warning">· Audio decode warning</span>{/if}</p>{/if}
           {#each detail.captures as capture (capture.id)}<section class="panel"><h2>Unfinished microphone capture</h2><p>Only acknowledged chunks were saved ({(capture.received_bytes / 1048576).toFixed(1)} MB). The last part of speech may be missing. Process the saved portion or discard it.</p><div class="downloads"><button class="primary" disabled={busy || !capture.next_sequence} onclick={() => processSavedCapture(capture)}>Process saved portion</button><button class="quiet" disabled={busy} onclick={() => discardSavedCapture(capture)}>Discard saved chunks</button></div></section>{/each}
-          <section class="panel"><h2>Add recording</h2><p>Upload audio or video, or record through the microphone. Live audio is saved to disk in short parts and processed after you stop. Processing stays local.</p><div class="live-record"><button class:recording class="quiet" type="button" onclick={() => recording ? stopRecording() : startRecording()} disabled={busy}>{recording ? "Stop recording" : "● Record live"}</button>{#if recording}<span class="record-indicator"><i></i> Recording · {formatElapsed(recordingSeconds)}<label class="record-health">Microphone level <meter min="0" max="1" value={microphoneLevel}></meter></label><small>{acknowledgedCaptureChunks} {acknowledgedCaptureChunks === 1 ? "chunk" : "chunks"} saved · {pendingChunkUploads} pending</small></span>{/if}</div><form class="upload-form" onsubmit={upload}>
+          <section class="panel"><h2>Add recording</h2><p>Upload audio or video, or record through the microphone. Live words are provisional; the complete saved recording is transcribed again after Stop.</p><div class="live-record"><button class:recording class="quiet" type="button" onclick={() => recording ? stopRecording() : startRecording()} disabled={busy}>{recording ? "Stop recording" : "● Record live"}</button>{#if recording}<span class="record-indicator"><i></i> Recording · {formatElapsed(recordingSeconds)}<label class="record-health">Microphone level <meter min="0" max="1" value={microphoneLevel}></meter></label><small>{acknowledgedCaptureChunks} {acknowledgedCaptureChunks === 1 ? "chunk" : "chunks"} saved · {pendingChunkUploads} pending</small></span>{/if}</div>{#if livePreviewStatus}<p role="status" class="status">{livePreviewStatus}</p>{/if}{#if liveSegments.length}<section class="panel live-transcript"><h3>Live transcript <span>Provisional</span></h3><div class="transcript">{#each liveSegments as segment (segment.id)}<p><time>{formatTime(segment.startMs)}</time><span>{segment.text}</span><small>{segment.language}</small></p>{/each}</div></section>{/if}<form class="upload-form" onsubmit={upload}>
             <label class="file-input">Recording file<input name="audio" type="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.mp4,.mov,.webm" required /></label>
             <label>Hardware profile<select bind:value={profileId}>{#each profiles as p (p.id)}<option value={p.id} disabled={!p.compatible}>{p.id === "laptop8" ? "Laptop · RTX 3070 Ti · 8 GB" : p.id === "hospital16" ? "Workstation · RTX 5080 · 16 GB" : p.id} {!p.compatible ? "· unavailable on this computer" : p.asrFilesPresent && p.llmFilePresent ? "· ready" : "· models missing"}</option>{/each}</select></label>
             <label>ASR language<select bind:value={language}><option value="ro">Romanian</option><option value="ru">Russian</option><option value="en">English</option><option value="auto">Auto-detect</option></select></label>
@@ -569,6 +666,6 @@
   .workspace{max-width:1440px;margin:auto;padding:22px 32px;min-height:100vh;box-sizing:border-box;display:grid;grid-template-rows:auto 1fr auto;gap:20px}.workspace header{display:flex;align-items:center;gap:16px;border-bottom:1px solid #dfe5e9;padding-bottom:16px}.workspace header>div{display:flex;align-items:center;gap:10px;margin-right:auto}.workspace header img{width:34px;height:36px}.workspace header span{display:grid}.workspace header small{font-size:10px;letter-spacing:.1em;color:#71808b}.quiet{background:white;border:1px solid #d9e0e5;border-radius:8px;padding:8px 12px;color:#37505d}.columns{display:grid;grid-template-columns:330px minmax(0,1fr);gap:22px;min-height:0}.columns aside,.content{min-width:0}.columns aside{border-right:1px solid #dfe5e9;padding-right:20px}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.panel-head h1,.panel-head h2{margin:0}.meeting-list{list-style:none;padding:0;margin:12px 0}.meeting-list button{width:100%;display:grid;text-align:left;border:0;border-radius:8px;background:transparent;padding:12px;color:inherit;gap:4px}.meeting-list button:hover,.meeting-list button.chosen{background:#e7f2f0}.meeting-list small,.muted,.eyebrow{color:#71808b}.pager{display:flex;justify-content:space-between;align-items:center;color:#6c7a85;font-size:13px}.pager button{border:1px solid #d9e0e5;border-radius:6px;background:white;padding:5px 10px}.pager button:disabled{opacity:.4}.new-meeting{display:grid;gap:12px;border-top:1px solid #dfe5e9;margin-top:18px;padding-top:18px}.new-meeting h3{margin:0}.content{display:grid;align-content:start;gap:16px}.eyebrow{margin:0 0 3px;font-size:13px}.panel{background:white;border:1px solid #e1e6ea;border-radius:12px;padding:18px 20px}.panel h2{font-size:18px;margin:0 0 8px}.panel h2 span{font-size:12px;font-weight:400;color:#71808b;margin-left:8px}.panel>p{margin:0 0 14px;color:#687985}.upload-form{display:grid;grid-template-columns:minmax(180px,1fr) 220px 155px auto;align-items:end;gap:12px}.upload-form input[type=file]{padding:8px}.upload-form label{font-size:13px}.status{color:#17675f;margin:14px 0 0}.transcript{max-height:55vh;overflow:auto}.transcript p{display:grid;grid-template-columns:25px 76px 1fr 35px;gap:12px;border-bottom:1px solid #eef1f3;padding:10px 0;margin:0}.transcript time,.transcript small{color:#82909a;font-size:12px}.warning{color:#9a6512}.empty{align-self:center;justify-self:center;max-width:560px;text-align:center;padding:56px 20px}.empty>span{display:inline-grid;place-items:center;background:#dcefea;color:#14655c;border-radius:50%;width:42px;height:42px;font-weight:800}.empty p{color:#6e7d87}.workspace footer{text-align:center;color:#81909a;font-size:12px;border-top:1px solid #dfe5e9;padding-top:12px}
   .transcript p{grid-template-columns:25px 76px 1fr 52px 35px}.edit-button{border:0;background:transparent;color:#17675f;font-size:12px}.edit-cell{display:grid;grid-template-columns:1fr auto auto;gap:8px}.edit-cell textarea{width:100%;box-sizing:border-box;border:1px solid #d7e0e7;border-radius:6px;padding:8px;font:inherit}.downloads{display:flex;gap:7px}.action-card{border-top:1px solid #eef1f3;padding:14px 0}.action-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.action-title b{font-size:15px}.action-kind,.action-state{border-radius:999px;background:#e8f2f0;color:#17675f;padding:3px 9px;font-size:11px;text-transform:capitalize}.action-state{background:#f1f2ed;color:#71632e}.action-meta{display:flex;gap:16px;color:#687985;font-size:13px;margin:8px 0}.action-card blockquote{margin:8px 0 0 12px;border-left:2px solid #83b7ad;padding:4px 10px;color:#42565f;font-size:13px}.action-card blockquote time{color:#81909a;margin-right:8px;font-size:11px}.review-note{display:block;border-top:1px solid #eef1f3;padding-top:10px;color:#71808b}
   .transcript p.with-find{grid-template-columns:25px 76px 24px 1fr 52px 35px}.select-match{align-self:center}.find-toolbar,.bulk-correction{display:flex;align-items:end;gap:10px;margin:10px 0 14px;flex-wrap:wrap}.find-toolbar label,.bulk-correction label{display:grid;gap:5px;font-size:12px;color:#71808b;min-width:200px}.find-toolbar input,.bulk-correction input{border:1px solid #d7e0e7;border-radius:6px;padding:8px;font:inherit}.find-toolbar span{color:#61727c;font-size:12px;margin:0 auto 8px 0}.bulk-correction{background:#f6f9f8;padding:10px;border-radius:8px}.audio-review{width:100%;margin:8px 0 14px}.play-passage{align-self:start;width:25px;height:25px;padding:0;border:1px solid #d9e0e5;border-radius:6px;background:white;color:#17675f;cursor:pointer}.play-passage:hover{background:#e7f2f0}.transcript mark{background:#fff0af;color:inherit}.transcript mark.current{background:#ffce57;outline:2px solid #e6a400;border-radius:2px}
-  .approval{display:flex;align-items:center;gap:9px;margin-bottom:14px;font-size:14px}.approval input{width:auto}.live-record{display:flex;align-items:center;gap:12px;margin:0 0 16px}.quiet.recording{border-color:#cd5b58;color:#a73535}.record-indicator{display:flex;align-items:center;gap:8px;color:#aa3d3d;font-size:13px;font-variant-numeric:tabular-nums}.record-indicator i{width:9px;height:9px;border-radius:50%;background:#cd4b48;animation:pulse 1.2s infinite}.record-health{display:flex;align-items:center;gap:8px;color:#71808b}.record-health meter{width:100px;height:12px}.record-indicator small{color:#71808b;font-size:11px;font-weight:400}@keyframes pulse{50%{opacity:.3}}
+  .approval{display:flex;align-items:center;gap:9px;margin-bottom:14px;font-size:14px}.approval input{width:auto}.live-record{display:flex;align-items:center;gap:12px;margin:0 0 16px}.quiet.recording{border-color:#cd5b58;color:#a73535}.record-indicator{display:flex;align-items:center;gap:8px;color:#aa3d3d;font-size:13px;font-variant-numeric:tabular-nums}.record-indicator i{width:9px;height:9px;border-radius:50%;background:#cd4b48;animation:pulse 1.2s infinite}.record-health{display:flex;align-items:center;gap:8px;color:#71808b}.record-health meter{width:100px;height:12px}.record-indicator small{color:#71808b;font-size:11px;font-weight:400}.live-transcript{margin-top:12px;background:#f7faf9;padding:12px 16px}.live-transcript h3{margin:0 0 6px;font-size:14px}.live-transcript h3 span{color:#71808b;font-size:11px;font-weight:400}.live-transcript .transcript{max-height:28vh}@keyframes pulse{50%{opacity:.3}}
   @media(max-width:900px){.columns{grid-template-columns:1fr}.columns aside{border:0;padding:0}.upload-form{grid-template-columns:1fr 1fr}.workspace{padding:18px}.transcript p{grid-template-columns:25px 62px 1fr 52px 35px}.transcript p.with-find{grid-template-columns:25px 62px 24px 1fr 52px 35px}}
 </style>
