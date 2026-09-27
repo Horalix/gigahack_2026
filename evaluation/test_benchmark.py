@@ -25,7 +25,7 @@ def test_decisions_use_one_to_one_matching_and_score_owner_date():
         {"text": "Dr Popescu va repeta testul mâine", "ownerLabel": None,
          "originalDateExpression": None},
     ]
-    result = _match_actions(gold, predictions)
+    result = _match_actions(gold, predictions, complete=True)
     assert (result["truePositive"], result["falsePositive"], result["falseNegative"]) == (1, 1, 0)
     assert result["ownerAndDateAccuracy"]["owner"]["accuracy"] == 1
     assert result["ownerAndDateAccuracy"]["date"]["accuracy"] == 1
@@ -59,6 +59,9 @@ def test_manifest_report_scores_without_copying_sensitive_text(tmp_path):
     assert report["runs"][0]["stageTotalSeconds"] == 3
     assert report["runs"][0]["stageRtf"] == 0.3
     assert report["runs"][0]["modelConfig"] == {"model": "local-test", "language": "ro"}
+    assert report["runs"][0]["decisions"]["scored"] is False
+    assert report["runs"][0]["decisions"]["falsePositive"] is None
+    assert report["runs"][0]["criticalTerms"]["scored"] is False
     assert "private/audio" not in rendered
     assert reference.read_text(encoding="utf-8") not in rendered
     assert hypothesis.read_text(encoding="utf-8") not in rendered

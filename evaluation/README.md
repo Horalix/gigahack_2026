@@ -29,7 +29,7 @@ Manifest shape:
 }
 ```
 
-Gold JSON contains `criticalTerms` (`id`, `canonical`, optional `aliases`, `expectedCount`) and `items` (`id`, human-authored `phrases`, optional expected `owner` and `date`). Decision matching is one-to-one phrase matching after case and punctuation normalization; it is a reproducible screening metric, not semantic adjudication. Only annotated term spellings/counts are scored. Manually review false matches, clinical terms, numbers, negation, owner and date before making accuracy claims.
+Gold JSON contains `criticalTerms` (`id`, `canonical`, optional `aliases`, `expectedCount`), `items` (`id`, human-authored `phrases`, optional expected `owner` and `date`), and `itemsComplete: true` only when a human has annotated the exhaustive action list. Without that explicit marker, action precision/recall is reported as unscored. Decision matching is one-to-one phrase matching after case and punctuation normalization; it is a reproducible screening metric, not semantic adjudication. Only annotated term spellings/counts are scored. Manually review false matches, clinical terms, numbers, negation, owner and date before making accuracy claims.
 
 `referenceState` must say whether the reference is human-verified, machine-generated, or synthetic. WER/CER against an unverified machine transcript measure disagreement, not clinical accuracy. Never score edited transcripts as raw ASR, or compare runs with different source/reference hashes as an apples-to-apples pair.
 

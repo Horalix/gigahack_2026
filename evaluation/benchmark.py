@@ -75,11 +75,19 @@ def score_critical_terms(reference: str, hypothesis: str, terms: list[dict[str, 
             "falseNegative": false_negative,
             "precision": _ratio(true_positive, true_positive + false_positive),
             "recall": _ratio(true_positive, true_positive + false_negative),
+            "scored": bool(terms),
             "terms": results,
             "scope": "Only explicitly annotated terms and expected counts are scored."}
 
 
-def _match_actions(gold: list[dict[str, Any]], predictions: list[dict[str, Any]]) -> dict:
+def _match_actions(gold: list[dict[str, Any]], predictions: list[dict[str, Any]], *,
+                   complete: bool = False) -> dict:
+    if not complete:
+        return {"scored": False, "goldComplete": False, "goldCount": len(gold),
+                "predictedCount": len(predictions), "truePositive": None,
+                "falsePositive": None, "falseNegative": None, "precision": None,
+                "recall": None, "f1": None, "matches": [],
+                "scope": "Action precision/recall requires a human-reviewed complete action list."}
     normalized_predictions = [f" {normalize(item.get('text', ''))} " for item in predictions]
     candidates = []
     for item in gold:
@@ -124,6 +132,8 @@ def _match_actions(gold: list[dict[str, Any]], predictions: list[dict[str, Any]]
                                "items": comparisons}
     return {"truePositive": true_positive, "falsePositive": false_positive,
             "falseNegative": false_negative,
+            "scored": True, "goldComplete": True,
+            "goldCount": len(gold), "predictedCount": len(predictions),
             "precision": _ratio(true_positive, true_positive + false_positive),
             "recall": _ratio(true_positive, true_positive + false_negative),
             "f1": _ratio(2 * true_positive, 2 * true_positive + false_positive + false_negative),
@@ -169,7 +179,8 @@ def evaluate_manifest(manifest_path: Path) -> dict:
                       "peakGpuUsedMiB": run.get("peakGpuUsedMiB"),
                       "transcript": score(reference, hypothesis),
                       "criticalTerms": score_critical_terms(reference, hypothesis, gold.get("criticalTerms", [])),
-                      "decisions": _match_actions(gold.get("items", []), predicted_items)}
+                      "decisions": _match_actions(gold.get("items", []), predicted_items,
+                                                  complete=gold.get("itemsComplete") is True)}
         audio_seconds = run_report["audioSeconds"]
         if audio_seconds and audio_seconds > 0 and isinstance(run_report["stageSeconds"], dict):
             total = sum(float(value) for value in run_report["stageSeconds"].values())
