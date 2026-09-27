@@ -23,7 +23,7 @@
     "model_alias": "whisper-large-v3-local",
     "backend": "faster_whisper",
     "compute_type": "float16",
-    "batch_size": 1,
+    "batch_size": 2,
     "beam_size": 5,
     "language": "auto",
     "word_timestamps": true,
