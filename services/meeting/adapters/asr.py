@@ -1,6 +1,8 @@
 """Offline faster-whisper transcription with source-aligned timings."""
 
 import gc
+import hashlib
+import json
 import subprocess
 import threading
 import time
@@ -12,6 +14,11 @@ class ASRError(RuntimeError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+
+
+def asr_configuration_hash(config: dict) -> str:
+    serialized = json.dumps(config["models"]["asr"], sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _gpu_memory_mib() -> int | None:

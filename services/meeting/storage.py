@@ -15,7 +15,7 @@ from typing import Iterator
 
 LEASE_SECONDS = 30
 MAX_CAPTURE_BYTES = 2 * 1024 * 1024 * 1024
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 def default_data_root() -> Path:
@@ -210,6 +210,16 @@ class Storage:
                     storage_key TEXT PRIMARY KEY, queued_at TEXT NOT NULL
                 )""")
                 db.execute("PRAGMA user_version=10")
+            if current < 11:
+                db.execute("""CREATE TABLE capture_preview_windows (
+                    session_id TEXT NOT NULL REFERENCES capture_sessions(id) ON DELETE CASCADE,
+                    start_ms INTEGER NOT NULL, ownership_end_ms INTEGER NOT NULL,
+                    asr_config_sha256 TEXT NOT NULL, segments_json TEXT NOT NULL,
+                    wall_seconds REAL NOT NULL, peak_gpu_memory_mib INTEGER,
+                    created_at TEXT NOT NULL, PRIMARY KEY(session_id,start_ms)
+                )""")
+                db.execute("CREATE INDEX capture_preview_config ON capture_preview_windows(asr_config_sha256,session_id,start_ms)")
+                db.execute("PRAGMA user_version=11")
 
     def asset_path(self, meeting_id: str, asset_id: str, suffix: str) -> Path:
         # IDs are generated locally; never put an uploaded name into a filesystem path.
@@ -602,6 +612,43 @@ class Storage:
                 FROM capture_sessions WHERE meeting_id=? AND organization_id=? AND state!='sealed'
                 ORDER BY created_at,id""", (meeting_id, organization_id)).fetchall()
             return [dict(row) for row in rows]
+
+    def save_capture_preview_window(self, session_id: str, organization_id: str, actor_id: str,
+                                    start_ms: int, ownership_end_ms: int, asr_config_sha256: str,
+                                    segments: list[dict], metrics: dict) -> None:
+        with self.transaction() as db:
+            capture = db.execute("""SELECT c.state,g.permission FROM capture_sessions c JOIN meeting_grants g
+                ON g.meeting_id=c.meeting_id AND g.organization_id=c.organization_id
+                WHERE c.id=? AND c.organization_id=? AND g.user_id=?""",
+                (session_id, organization_id, actor_id)).fetchone()
+            if not capture or capture["permission"] not in {"owner", "editor"}:
+                raise LookupError("Capture not found")
+            if capture["state"] != "capturing":
+                raise ValueError("Capture is no longer accepting preview windows")
+            db.execute("""INSERT INTO capture_preview_windows
+                (session_id,start_ms,ownership_end_ms,asr_config_sha256,segments_json,wall_seconds,
+                 peak_gpu_memory_mib,created_at) VALUES(?,?,?,?,?,?,?,?)
+                ON CONFLICT(session_id,start_ms) DO UPDATE SET
+                ownership_end_ms=excluded.ownership_end_ms,asr_config_sha256=excluded.asr_config_sha256,
+                segments_json=excluded.segments_json,wall_seconds=excluded.wall_seconds,
+                peak_gpu_memory_mib=excluded.peak_gpu_memory_mib,created_at=excluded.created_at""",
+                (session_id, start_ms, ownership_end_ms, asr_config_sha256,
+                 json.dumps(segments, ensure_ascii=False, separators=(",", ":")),
+                 float(metrics.get("wallSeconds", 0)), metrics.get("peakGpuMemoryMiBObserved"), timestamp()))
+
+    def get_capture_preview_windows(self, asset_id: str, organization_id: str,
+                                    asr_config_sha256: str) -> list[dict]:
+        with closing(self.connect()) as db:
+            rows = db.execute("""SELECT w.* FROM capture_preview_windows w
+                JOIN capture_sessions c ON c.id=w.session_id
+                WHERE c.asset_id=? AND c.organization_id=? AND c.state='sealed' AND w.asr_config_sha256=?
+                ORDER BY w.start_ms""", (asset_id, organization_id, asr_config_sha256)).fetchall()
+            windows = []
+            for row in rows:
+                item = dict(row)
+                item["segments"] = json.loads(item.pop("segments_json"))
+                windows.append(item)
+            return windows
 
     def delete_capture(self, session_id: str, organization_id: str, actor_id: str) -> bool:
         with self.transaction() as db:

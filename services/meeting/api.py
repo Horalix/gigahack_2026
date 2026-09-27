@@ -675,7 +675,7 @@ def create_app(data_root: Path | None = None) -> FastAPI:
             raise ServiceError(422, "PREVIEW_OFFSET_INVALID", "Preview ownership offsets must fit within the audio window")
 
         from .models import ModelAssetError, validate_assets, resolve_profile
-        from .adapters.asr import ASRError, transcribe_audio
+        from .adapters.asr import ASRError, asr_configuration_hash, transcribe_audio
         try:
             config = resolve_profile(profile_id, overrides={"asr": {"language": language}})
             minimum_ram = float(config.get("limits", {}).get("min_available_ram_gb", 8))
@@ -719,8 +719,27 @@ def create_app(data_root: Path | None = None) -> FastAPI:
             raise ServiceError(422, "PROFILE_UNAVAILABLE", str(exc)) from exc
         except OSError as exc:
             raise ServiceError(507, "PREVIEW_STORAGE_UNAVAILABLE", "The temporary preview window could not be stored") from exc
-        owned = [segment for segment in result["segments"]
-                 if ownership_start_ms <= (segment["startMs"] + segment["endMs"]) // 2 < ownership_end_ms]
+        owned = []
+        for segment in result["segments"]:
+            if segment.get("words"):
+                words = [dict(word) for word in segment["words"]
+                         if ownership_start_ms <= (word["startMs"] + word["endMs"]) // 2 < ownership_end_ms]
+                if not words:
+                    continue
+                for word in words:
+                    word["startMs"] = max(ownership_start_ms, word["startMs"])
+                    word["endMs"] = min(ownership_end_ms, word["endMs"])
+                owned.append({**segment, "startMs": min(word["startMs"] for word in words),
+                              "endMs": max(word["endMs"] for word in words),
+                              "text": "".join(word["text"] for word in words), "words": words})
+            elif ownership_start_ms <= (segment["startMs"] + segment["endMs"]) // 2 < ownership_end_ms:
+                owned.append(segment)
+        try:
+            db.save_capture_preview_window(capture_id, actor["organization_id"], actor["id"],
+                                           start_ms, ownership_end_ms, asr_configuration_hash(config),
+                                           owned, result["metrics"])
+        except (LookupError, ValueError) as exc:
+            raise ServiceError(409, "CAPTURE_PREVIEW_STALE", "Capture ended before this preview could be saved", retryable=True) from exc
         return {"segments": owned, "startMs": start_ms, "endMs": window_end,
                 "ownershipStartMs": ownership_start_ms, "ownershipEndMs": ownership_end_ms,
                 "wallSeconds": result["metrics"]["wallSeconds"]}
