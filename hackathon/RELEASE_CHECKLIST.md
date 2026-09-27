@@ -18,7 +18,7 @@
 
 ## Must remain disclosed as open
 
-- [ ] Full one-hour upload-to-approved-file timing at or below 15 minutes. Latest local ASR+LLM stage-sum projects to 20.0 minutes/hour; no one-hour test has been completed.
+- [ ] Full one-hour upload-to-approved-file timing at or below 15 minutes. Last integrated run projected to 20.0 minutes/hour at its then-current profile; a standalone batch-2 ASR probe plus the earlier LLM run projects to 12.2, but the app has not been retimed end to end under batch 2. No one-hour test has been completed.
 - [ ] RTX 5080 / 16 GB host test. `hospital16` batch 4 and CUDA 13 are configured but not physically verified here.
 - [ ] WAN-disconnected launch and external-egress observation on the final demo build.
 - [ ] Physical microphone recording, permission-loss and user-visible preview-lag behavior on the demo device. Mocked UI plus one real sample-window API test pass, but no ambient/microphone run has been performed.
