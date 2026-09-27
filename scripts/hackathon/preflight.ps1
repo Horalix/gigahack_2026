@@ -19,6 +19,8 @@ if (!(Test-Path -LiteralPath (Join-Path $projectRoot 'node_modules/vite/bin/vite
 $pythonCheck = @'
 import os
 from services.meeting.models import resolve_profile, validate_assets
+from pathlib import Path
+import os
 from services.meeting.storage import Storage
 from services.meeting.api import host_available_memory_gb
 from services.meeting.adapters.llm import _runtime_path
@@ -33,9 +35,21 @@ if profile != 'cpu':
     ready, issue = configure_cuda_dll_search()
     if not ready:
         raise SystemExit('{}. Install services/meeting/requirements.lock or set MOM_CUDA_DLL_PATHS.'.format(issue))
-Storage()
+store = Storage()
+root = store.root.resolve()
+sync_folders = {'onedrive', 'dropbox', 'google drive', 'icloud drive'}
+if any(part.casefold() in sync_folders for part in root.parts):
+    raise SystemExit('App data is inside a known sync folder: {}. Set MOM_DATA_DIR to a local, unsynced directory.'.format(root))
+probe = root / '.notavra-write-check-{}'.format(os.getpid())
+try:
+    with probe.open('xb') as handle:
+        handle.write(b'local storage check')
+        handle.flush()
+        os.fsync(handle.fileno())
+finally:
+    probe.unlink(missing_ok=True)
 ram = host_available_memory_gb()
-print('Profile {}: pinned ASR/LLM files, llama.cpp runtime and CUDA libraries verified; available RAM: {:.1f} GiB.'.format(profile, ram) if ram is not None else 'Profile {}: model assets/runtime verified; available RAM could not be detected.'.format(profile))
+print('Profile {}: pinned ASR/LLM files, llama.cpp runtime, CUDA libraries and writable unsynced storage verified at {}; available RAM: {:.1f} GiB.'.format(profile, root, ram) if ram is not None else 'Profile {}: model assets/runtime and writable unsynced storage verified at {}; available RAM could not be detected.'.format(profile, root))
 '@
 $priorErrorAction = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'

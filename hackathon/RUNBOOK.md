@@ -19,6 +19,8 @@ The model/runtime setup commands download and verify pinned assets. They need in
 
 ## Start the demo
 
+Preflight confirms that the app data directory is writable and outside common sync folders (OneDrive, Dropbox, Google Drive, iCloud Drive). To select another local directory before startup, set `$env:MOM_DATA_DIR` to that path; recordings, database files and logs must stay out of synced folders.
+
 Laptop, RTX 3070 Ti Mobile / 8 GB:
 
 ```powershell

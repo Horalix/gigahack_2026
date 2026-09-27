@@ -39,7 +39,7 @@
 ## Next
 
 - Qualify PBI-004 against known-language references and review the code-switch window choice; then continue PBI-009 grounded decisions while Affan builds the PBI-010 artifact renderer.
-- For GigaHack, validate provisional ASR on a physical microphone, test the 5080 profile, complete clinician review and delivery acceptance. A Windows MSI/NSIS package build passed; fresh-machine install/launch and WAN-disconnected egress remain open. Browser-mode startup passed preflight and served the UI/API locally; the fresh isolated run confirmed the first-account setup path. See the current P0 items in `hackathon/pbis/README.md`.
+- For GigaHack, validate provisional ASR on a physical microphone, test the 5080 profile, complete clinician review and delivery acceptance. Preflight now checks writable app data outside common sync folders, but this latest check has not been run. A Windows MSI/NSIS package build passed; fresh-machine install/launch and WAN-disconnected egress remain open. Browser-mode startup passed earlier and served the UI/API locally; the fresh isolated run confirmed the first-account setup path. See the current P0 items in `hackathon/pbis/README.md`.
 - Complete the remaining controlled checks in `installer-smoke-test.md`: native mouse/menu interaction, mixed-DPI/fullscreen behavior, live microphone, clean-machine installation, and broader speech accuracy/latency.
 
 ## Risks
