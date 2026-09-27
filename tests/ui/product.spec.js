@@ -12,6 +12,10 @@ async function installApi(page, { setupRequired = true, failedJob = false } = {}
   let uploaded = false;
   let approved = false;
   let jobState = failedJob ? "failed" : "ready";
+  let transcriptText = "Pacientul va reveni luni.";
+  let transcriptRevision = 1;
+  let canUndoCorrection = false;
+  let needsReprocess = false;
   const user = { id: "user-1", username: "doctor", role: "administrator" };
   const segment = { id: "seg-1", startMs: 1000, endMs: 3000, text: "Pacientul va reveni luni.", language: "ro" };
   const decision = {
@@ -25,12 +29,12 @@ async function installApi(page, { setupRequired = true, failedJob = false } = {}
     { id: "cpu", hardware: { gpu: null, vram_gb: 0 }, asrFilesPresent: true, llmFilePresent: true, compatible: true },
   ];
   const detail = () => ({
-    meeting: { ...meeting, status: uploaded ? "transcript_ready" : "created", transcriptRevision: uploaded ? 1 : 0 },
+    meeting: { ...meeting, status: uploaded ? "transcript_ready" : "created", transcriptRevision: uploaded ? transcriptRevision : 0 },
     permission: "owner", asset: uploaded ? { durationMs: 60_000 } : null,
-    segments: uploaded ? [segment] : [],
+    segments: uploaded ? [{ ...segment, text: transcriptText }] : [],
     latestJob: uploaded ? { id: "job-1", state: jobState, stage: jobState === "failed" ? "extract" : "complete", errorCode: jobState === "failed" ? "LLM_INVALID_EVIDENCE" : null } : null,
-    decisions: uploaded && jobState === "ready" ? { items: [decision], requiresHumanReview: true } : null,
-    canUndoCorrection: false, captures: [],
+    decisions: uploaded && jobState === "ready" && !needsReprocess ? { items: [{ ...decision, text: transcriptText, taskEvidence: [{ ...decision.taskEvidence[0], quote: transcriptText }] }], requiresHumanReview: true } : null,
+    canUndoCorrection, captures: [],
     artifact: approved ? { id: "artifact-1", sha256: "abc123", approvedAt: new Date().toISOString(), storageKey: "artifact.html" } : null,
   });
   await page.route("**/api/**", async (route) => {
@@ -59,6 +63,14 @@ async function installApi(page, { setupRequired = true, failedJob = false } = {}
       segments: [{ id: "preview-seg-1", startMs: 1000, endMs: 3000, text: "Bună ziua, doamnă doctor.", language: "ro" }], wallSeconds: 0.5,
     });
     if (path === "/captures/capture-1/seal" && method === "POST") { uploaded = true; return json({ id: "asset-1", durationMs: 1000 }, 201); }
+    if (path === "/meetings/meeting-1/segments/seg-1" && method === "PUT") {
+      transcriptText = JSON.parse(request.postData() || "{}").text; transcriptRevision += 1; canUndoCorrection = true; needsReprocess = true;
+      return json({ transcriptRevision });
+    }
+    if (path === "/meetings/meeting-1/transcript/undo" && method === "POST") {
+      transcriptText = segment.text; transcriptRevision += 1; canUndoCorrection = false; needsReprocess = true;
+      return json({ transcriptRevision });
+    }
     if (path === "/patients" && method === "GET") {
       const q = (url.searchParams.get("q") || "").toLowerCase();
       const matches = patients.filter((item) => !q || item.displayName.toLowerCase().includes(q) || (item.hospitalReference || "").toLowerCase().includes(q));
@@ -162,6 +174,30 @@ test("doctor can retry a failed local extraction from the meeting", async ({ pag
   await retry.click();
   await expect(page.getByText("Transcript and decisions are ready for review.")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText("Pacientul va reveni luni.").first()).toBeVisible();
+});
+
+test("doctor correction invalidates actions and audited undo restores source wording", async ({ page }) => {
+  await installApi(page);
+  await page.goto("/");
+  await page.getByLabel("Username").fill("doctor");
+  await page.getByLabel("Password").fill("correct horse battery staple");
+  await page.getByRole("button", { name: "Create administrator" }).click();
+  await page.getByLabel("Meeting title").fill("Review corrections");
+  await page.getByRole("button", { name: "Create meeting" }).click();
+  await page.locator('input[name="audio"]').setInputFiles({ name: "sample.wav", mimeType: "audio/wav", buffer: Buffer.from("sample") });
+  await page.getByRole("button", { name: "Transcribe recording" }).click();
+  await expect(page.getByText("Transcript and decisions are ready for review.")).toBeVisible({ timeout: 10_000 });
+
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page.locator(".edit-cell textarea").fill("Pacientul va reveni marți.");
+  await page.getByRole("button", { name: "Save correction" }).click();
+  await expect(page.getByText("Pacientul va reveni marți.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Decisions and actions/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Reprocess saved audio locally" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Undo last correction" }).click();
+  await expect(page.getByText("Pacientul va reveni luni.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Reprocess saved audio locally" })).toBeVisible();
 });
 
 test("microphone capture shows input level and confirmed local chunks", async ({ page }) => {
